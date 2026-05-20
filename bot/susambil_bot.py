@@ -453,7 +453,8 @@ async def game_leaderboard(callback: types.CallbackQuery):
     top = await get_leaderboard(gid, 10)
     medals = ["🥇","🥈","🥉"] + ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
 
-    text = f"🏆 <b>{g.get('name','O\'yin')} — TOP 10</b>\n\n"
+    game_name = g.get('name', 'O\'yin')
+    text = f"🏆 <b>{game_name} — TOP 10</b>\n\n"
     if top:
         for i, row in enumerate(top):
             name = row['full_name'] or row['username'] or "Noma'lum"
