@@ -1,0 +1,15 @@
+services:
+  - type: worker
+    name: susambil-market-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot/bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      - key: CHANNEL_ID
+        sync: false
+      - key: DB_PATH
+        value: susambil.db
