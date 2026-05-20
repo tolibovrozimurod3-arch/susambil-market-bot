@@ -1,393 +1,646 @@
 """
-╔══════════════════════════════════════════════╗
-║         SUSAMBIL MARKET BOT 🌟               ║
-║   O'zbekiston №1 Raqamli Mahsulotlar Bozori  ║
-╚══════════════════════════════════════════════╝
+╔══════════════════════════════════════════════════════╗
+║        SUSAMBIL MARKET — GAMING PLATFORM 🎮          ║
+║   O'zbekistonning №1 O'yin va Mini App Platformasi   ║
+╚══════════════════════════════════════════════════════╝
 """
 
 import logging
 import os
-from dotenv import load_dotenv
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import CommandStart, Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram import F
+import json
 import asyncio
+from datetime import datetime, date
+from dotenv import load_dotenv
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import CommandStart, Command
+from aiogram.types import (
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    WebAppInfo, InlineQueryResultArticle, InputTextMessageContent
+)
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiohttp import web
+import aiosqlite
 
-# ─── .env FAYLDAN O'QISH ────────────────────────────────────
 load_dotenv()
 
-BOT_TOKEN  = os.getenv("BOT_TOKEN")
-ADMIN_IDS  = list(map(int, os.getenv("ADMIN_IDS", "").split(",")))
-CHANNEL_ID = os.getenv("CHANNEL_ID", "@susambil_market")
-
-if not BOT_TOKEN:
-    raise ValueError("❌ BOT_TOKEN topilmadi! .env faylni tekshiring.")
+BOT_TOKEN   = os.getenv("BOT_TOKEN")
+ADMIN_IDS   = list(map(int, os.getenv("ADMIN_IDS", "0").split(",")))
+CHANNEL     = os.getenv("CHANNEL_ID", "@susambilmarket")
+WEBAPP_URL  = os.getenv("WEBAPP_URL", "https://susambil.vercel.app")
+DB_PATH     = os.getenv("DB_PATH", "susambil.db")
 
 logging.basicConfig(level=logging.INFO)
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
+bot = Bot(token=BOT_TOKEN, parse_mode="HTML")
+dp  = Dispatcher()
 
-# ─── MAHSULOT MA'LUMOTLAR BAZASI (keyinchalik SQLite/PostgreSQL) ──
-PRODUCTS = {
-    "bots": [
-        {"id": "b1", "name": "🛒 Do'kon Bot", "desc": "Kichik biznes uchun to'liq savdo boti", "price": 150000, "emoji": "🛒"},
-        {"id": "b2", "name": "📅 Navbat Bot", "desc": "Online navbat va bronlash boti", "price": 100000, "emoji": "📅"},
-        {"id": "b3", "name": "📊 Quiz Bot", "desc": "Test va viktorina boti", "price": 80000, "emoji": "📊"},
-        {"id": "b4", "name": "🍕 Restoran Bot", "desc": "Menu va buyurtma qabul boti", "price": 200000, "emoji": "🍕"},
-    ],
-    "templates": [
-        {"id": "t1", "name": "📈 Biznes Reja", "desc": "Excel'da professional biznes reja", "price": 25000, "emoji": "📈"},
-        {"id": "t2", "name": "💰 Budjet Nazorat", "desc": "Oilaviy/biznes budjet hisobi", "price": 15000, "emoji": "💰"},
-        {"id": "t3", "name": "🎨 Canva Pack", "desc": "30ta SMM post shabloni", "price": 35000, "emoji": "🎨"},
-        {"id": "t4", "name": "📋 Notion Workspace", "desc": "Ish boshqaruvi uchun Notion", "price": 20000, "emoji": "📋"},
-    ],
-    "courses": [
-        {"id": "c1", "name": "🐍 Python Starter", "desc": "Boshlang'ichlar uchun Python PDF", "price": 30000, "emoji": "🐍"},
-        {"id": "c2", "name": "📱 SMM Qo'llanma", "desc": "Ijtimoiy tarmoqlar boshqaruvi", "price": 40000, "emoji": "📱"},
-        {"id": "c3", "name": "💼 CV Shablon", "desc": "5ta professional CV + cover letter", "price": 10000, "emoji": "💼"},
-        {"id": "c4", "name": "🤖 AI Promptlar", "desc": "500+ tayyor AI prompt to'plami", "price": 20000, "emoji": "🤖"},
-    ],
-    "miniapps": [
-        {"id": "m1", "name": "🧮 Hisob Kalkulator", "desc": "Biznes hisob-kitob mini app", "price": 50000, "emoji": "🧮"},
-        {"id": "m2", "name": "📝 To-Do Manager", "desc": "Vazifalar boshqaruvi mini app", "price": 45000, "emoji": "📝"},
-        {"id": "m3", "name": "🎯 Poll Creator", "desc": "So'rovnoma yaratish mini app", "price": 60000, "emoji": "🎯"},
-    ],
+# ═══════════════════════════════════════════════════════
+#  MA'LUMOTLAR BAZASI
+# ═══════════════════════════════════════════════════════
+
+async def init_db():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.executescript("""
+            CREATE TABLE IF NOT EXISTS users (
+                tg_id       INTEGER PRIMARY KEY,
+                username    TEXT,
+                full_name   TEXT,
+                coins       INTEGER DEFAULT 0,
+                level       INTEGER DEFAULT 1,
+                xp          INTEGER DEFAULT 0,
+                games_played INTEGER DEFAULT 0,
+                wins        INTEGER DEFAULT 0,
+                streak      INTEGER DEFAULT 0,
+                last_daily  TEXT DEFAULT '',
+                joined_at   TEXT DEFAULT (datetime('now')),
+                invited_by  INTEGER DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS scores (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     INTEGER,
+                game_id     TEXT,
+                score       INTEGER,
+                played_at   TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS achievements (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     INTEGER,
+                badge       TEXT,
+                earned_at   TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS daily_tasks (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     INTEGER,
+                task        TEXT,
+                done        INTEGER DEFAULT 0,
+                task_date   TEXT
+            );
+        """)
+        await db.commit()
+
+async def get_user(tg_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM users WHERE tg_id=?", (tg_id,)) as cur:
+            return await cur.fetchone()
+
+async def create_user(tg_id, username, full_name, invited_by=0):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO users (tg_id,username,full_name,invited_by) VALUES (?,?,?,?)",
+            (tg_id, username, full_name, invited_by)
+        )
+        await db.commit()
+
+async def add_coins(tg_id, amount):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE users SET coins=coins+? WHERE tg_id=?", (amount, tg_id))
+        await db.commit()
+
+async def add_xp(tg_id, xp):
+    async with aiosqlite.connect(DB_PATH) as db:
+        user = await get_user(tg_id)
+        if not user: return
+        new_xp = user['xp'] + xp
+        new_level = 1 + new_xp // 500  # har 500 XP = 1 level
+        await db.execute(
+            "UPDATE users SET xp=?, level=? WHERE tg_id=?",
+            (new_xp, new_level, tg_id)
+        )
+        await db.commit()
+        return new_level > user['level']  # level oshganini qaytaradi
+
+async def save_score(user_id, game_id, score):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO scores (user_id,game_id,score) VALUES (?,?,?)",
+            (user_id, game_id, score)
+        )
+        await db.execute("UPDATE users SET games_played=games_played+1 WHERE tg_id=?", (user_id,))
+        await db.commit()
+
+async def get_leaderboard(game_id=None, limit=10):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        if game_id:
+            query = """
+                SELECT u.full_name, u.username, MAX(s.score) as best, u.level
+                FROM scores s JOIN users u ON s.user_id=u.tg_id
+                WHERE s.game_id=?
+                GROUP BY s.user_id ORDER BY best DESC LIMIT ?
+            """
+            async with db.execute(query, (game_id, limit)) as cur:
+                return await cur.fetchall()
+        else:
+            query = """
+                SELECT full_name, username, coins, level, xp, games_played
+                FROM users ORDER BY coins DESC LIMIT ?
+            """
+            async with db.execute(query, (limit,)) as cur:
+                return await cur.fetchall()
+
+async def claim_daily(tg_id):
+    today = date.today().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        user = await get_user(tg_id)
+        if user and user['last_daily'] == today:
+            return False, 0
+        streak = (user['streak'] + 1) if user else 1
+        coins = 50 + (streak * 10)  # streak bonus
+        await db.execute(
+            "UPDATE users SET coins=coins+?, last_daily=?, streak=? WHERE tg_id=?",
+            (coins, today, streak, tg_id)
+        )
+        await db.commit()
+        return True, coins
+
+# ═══════════════════════════════════════════════════════
+#  O'YIN KATALOGI
+# ═══════════════════════════════════════════════════════
+
+GAMES = {
+    "sozlik": {
+        "name": "🔤 So'zlik",
+        "desc": "5 harfli o'zbek so'zini top! Wordle o'zbek tilida.",
+        "genre": "🧠 Mantiq",
+        "players": "12.5K",
+        "rating": "4.9",
+        "coins": 20,
+        "emoji": "🔤",
+    },
+    "calculator": {
+        "name": "🧮 Biznes Kalkulator",
+        "desc": "Foyda, ROI va narx hisoblash mini ilovasi.",
+        "genre": "🛠 Asbob",
+        "players": "8.2K",
+        "rating": "4.8",
+        "coins": 0,
+        "emoji": "🧮",
+    },
+    "quiz_uz": {
+        "name": "❓ Bilim Bellashuvi",
+        "desc": "O'zbekiston tarixi, geografiya, fan bo'yicha test.",
+        "genre": "🎓 Bilim",
+        "players": "5.1K",
+        "rating": "4.7",
+        "coins": 30,
+        "emoji": "❓",
+    },
+    "math_duel": {
+        "name": "🔢 Tez Hisob",
+        "desc": "30 soniyada imkon qadar ko'p misol yesh!",
+        "genre": "⚡ Tezkor",
+        "players": "9.8K",
+        "rating": "4.8",
+        "coins": 25,
+        "emoji": "🔢",
+    },
+    "memory": {
+        "name": "🃏 Xotira O'yini",
+        "desc": "Kartochkalarni juftlab top — xotirangni sinab ko'r!",
+        "genre": "🧩 Puzzle",
+        "players": "7.3K",
+        "rating": "4.6",
+        "coins": 15,
+        "emoji": "🃏",
+    },
+    "currency": {
+        "name": "💱 Valyuta",
+        "desc": "Real vaqt valyuta kurslari konvertori.",
+        "genre": "🛠 Asbob",
+        "players": "4.5K",
+        "rating": "4.7",
+        "coins": 0,
+        "emoji": "💱",
+    },
 }
 
-# Foydalanuvchi savatchalari (xotirada, keyinchalik DB)
-user_carts = {}
+GENRES = {
+    "🧠 Mantiq": ["sozlik"],
+    "⚡ Tezkor": ["math_duel"],
+    "🎓 Bilim":  ["quiz_uz"],
+    "🧩 Puzzle": ["memory"],
+    "🛠 Asbob":  ["calculator", "currency"],
+}
 
-# ─── YORDAMCHI FUNKSIYALAR ───────────────────────────────────
-def format_price(price: int) -> str:
-    return f"{price:,} so'm".replace(",", " ")
+LEVEL_NAMES = {
+    1: "🌱 Yangi boshlovchi",
+    2: "⭐ O'rganuvchi",
+    3: "🌟 Faol o'yinchi",
+    4: "💫 Tajribali",
+    5: "🔥 Ustoz",
+    6: "💎 Mestr",
+    7: "👑 Chempion",
+    8: "🏆 Legend",
+    9: "🌈 Superstar",
+    10: "🚀 Susambil Pro",
+}
 
-def get_main_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="🤖 Bot Bozor", callback_data="cat_bots"),
-        InlineKeyboardButton(text="📦 Shablonlar", callback_data="cat_templates"),
-    )
-    builder.row(
-        InlineKeyboardButton(text="📚 Bilim Bozori", callback_data="cat_courses"),
-        InlineKeyboardButton(text="🛠 Mini App'lar", callback_data="cat_miniapps"),
-    )
-    builder.row(
-        InlineKeyboardButton(text="🛒 Savatcha", callback_data="cart"),
-        InlineKeyboardButton(text="📞 Aloqa", callback_data="contact"),
-    )
-    builder.row(
-        InlineKeyboardButton(text="ℹ️ Susambil Market haqida", callback_data="about"),
-    )
-    return builder.as_markup()
+def level_name(level):
+    return LEVEL_NAMES.get(min(level, 10), "🚀 Susambil Pro")
 
-def get_back_keyboard(back_to: str = "main") -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"back_{back_to}"))
-    return builder.as_markup()
+def xp_bar(xp):
+    filled = (xp % 500) // 50
+    bar = "█" * filled + "░" * (10 - filled)
+    return f"[{bar}] {xp%500}/500 XP"
 
-# ─── /START KOMANDASI ────────────────────────────────────────
+# ═══════════════════════════════════════════════════════
+#  KLAVIATURALAR
+# ═══════════════════════════════════════════════════════
+
+def main_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🎮 O'yinlar", callback_data="games_home"),
+            InlineKeyboardButton(text="🛠 Mini App'lar", callback_data="miniapps"),
+        ],
+        [
+            InlineKeyboardButton(text="👤 Profilim", callback_data="profile"),
+            InlineKeyboardButton(text="🏆 Reyting", callback_data="leaderboard"),
+        ],
+        [
+            InlineKeyboardButton(text="🎁 Kunlik sovg'a", callback_data="daily"),
+            InlineKeyboardButton(text="👥 Do'stlarni taklif", callback_data="invite"),
+        ],
+        [
+            InlineKeyboardButton(text="🛒 Market", callback_data="market"),
+            InlineKeyboardButton(text="📢 Kanal", url=f"https://t.me/susambilmarket"),
+        ],
+    ])
+
+# ═══════════════════════════════════════════════════════
+#  HANDLERLAR
+# ═══════════════════════════════════════════════════════
+
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     user = message.from_user
-    welcome_text = f"""
-🌟 <b>Susambil Market'ga xush kelibsiz!</b>
+    args = message.text.split()
+    invited_by = int(args[1].replace("ref_","")) if len(args)>1 and args[1].startswith("ref_") else 0
+
+    await create_user(user.id, user.username or "", user.full_name, invited_by)
+
+    if invited_by and invited_by != user.id:
+        await add_coins(invited_by, 100)
+        try:
+            await bot.send_message(invited_by,
+                f"🎉 Do'stingiz <b>{user.full_name}</b> qo'shildi!\n+100 🪙 coin oldiniz!")
+        except: pass
+
+    db_user = await get_user(user.id)
+    coins = db_user['coins'] if db_user else 0
+
+    text = f"""
+🌟 <b>SUSAMBIL MARKET</b> ga xush kelibsiz!
 
 Salom, <b>{user.first_name}</b>! 👋
+💰 Balansingiz: <b>{coins} 🪙</b>
 
-🏪 Bu yerda siz topa olasiz:
-• 🤖 <b>Tayyor Telegram Botlar</b>
-• 📦 <b>Biznes Shablonlar</b>
-• 📚 <b>Raqamli Kurslar & PDF</b>
-• 🛠 <b>Telegram Mini App'lar</b>
+🎮 O'yin o'ynang → coin yig'ing
+🏆 Reytingda yuqoriga chiqing
+🎁 Har kuni sovg'a oling
+👥 Do'stlarni taklif qiling → bonus oling
 
-<i>O'zbekistonning №1 raqamli mahsulotlar bozori!</i>
+<i>O'zbekistonning №1 o'yin platformasi!</i>
+"""
+    await message.answer(text, reply_markup=main_menu())
 
-👇 Quyidan tanlang:
-    """
-    await message.answer(welcome_text, parse_mode="HTML", reply_markup=get_main_keyboard())
-
-# ─── KATEGORIYALAR ───────────────────────────────────────────
-CATEGORY_INFO = {
-    "cat_bots":      ("🤖 BOT BOZOR", "bots", "Tayyor Telegram botlar — biznesingizni avtomatlashtiring!"),
-    "cat_templates": ("📦 SHABLONLAR DO'KONI", "templates", "Excel, Notion, Canva — professional shablonlar!"),
-    "cat_courses":   ("📚 BILIM BOZORI", "courses", "PDF kurslar, cheat sheet'lar — o'rganing va o'sing!"),
-    "cat_miniapps":  ("🛠 MINI APP'LAR", "miniapps", "Tayyor Telegram Mini ilovalar!"),
-}
-
-@dp.callback_query(F.data.startswith("cat_"))
-async def show_category(callback: types.CallbackQuery):
-    cat_key = callback.data
-    title, product_key, desc = CATEGORY_INFO[cat_key]
-    products = PRODUCTS[product_key]
-
+# ── O'YINLAR BOSH SAHIFASI ───────────────────────────────────
+@dp.callback_query(F.data == "games_home")
+async def games_home(callback: types.CallbackQuery):
     builder = InlineKeyboardBuilder()
-    for p in products:
-        builder.row(
-            InlineKeyboardButton(
-                text=f"{p['emoji']} {p['name']} — {format_price(p['price'])}",
-                callback_data=f"product_{product_key}_{p['id']}"
-            )
-        )
-    builder.row(InlineKeyboardButton(text="⬅️ Bosh menyu", callback_data="back_main"))
-
-    text = f"<b>{title}</b>\n\n{desc}\n\n📋 <i>Mahsulotni tanlang:</i>"
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
-
-# ─── MAHSULOT TAFSILOTI ──────────────────────────────────────
-@dp.callback_query(F.data.startswith("product_"))
-async def show_product(callback: types.CallbackQuery):
-    _, cat, prod_id = callback.data.split("_", 2)
-    product = next((p for p in PRODUCTS[cat] if p["id"] == prod_id), None)
-    if not product:
-        await callback.answer("Mahsulot topilmadi!")
-        return
-
-    text = f"""
-{product['emoji']} <b>{product['name']}</b>
-
-📝 <b>Tavsif:</b>
-{product['desc']}
-
-💰 <b>Narxi:</b> {format_price(product['price'])}
-
-⭐️ Sifat kafolatlangan!
-    """
-    builder = InlineKeyboardBuilder()
+    for gid, g in GAMES.items():
+        coin_text = f" • +{g['coins']}🪙" if g['coins'] > 0 else ""
+        builder.row(InlineKeyboardButton(
+            text=f"{g['emoji']} {g['name']} ⭐{g['rating']}{coin_text}",
+            callback_data=f"game_{gid}"
+        ))
     builder.row(
-        InlineKeyboardButton(text="🛒 Savatga qo'shish", callback_data=f"addcart_{cat}_{prod_id}"),
-        InlineKeyboardButton(text="💳 Hozir sotib olish", callback_data=f"buynow_{cat}_{prod_id}"),
+        InlineKeyboardButton(text="🏆 Top o'yinchilar", callback_data="leaderboard"),
+        InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_main"),
     )
-    builder.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"cat_{cat}"))
 
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
+    text = "🎮 <b>O'YINLAR KATALOGI</b>\n\nO'yin tanlang va coin yig'ing! 🪙"
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
 
-# ─── SAVATCHA ────────────────────────────────────────────────
-@dp.callback_query(F.data.startswith("addcart_"))
-async def add_to_cart(callback: types.CallbackQuery):
-    _, cat, prod_id = callback.data.split("_", 2)
-    user_id = callback.from_user.id
-    product = next((p for p in PRODUCTS[cat] if p["id"] == prod_id), None)
-    if not product:
-        await callback.answer("Xatolik!")
+# ── O'YIN TAFSILOTI ──────────────────────────────────────────
+@dp.callback_query(F.data.startswith("game_"))
+async def game_detail(callback: types.CallbackQuery):
+    gid = callback.data.replace("game_", "")
+    g = GAMES.get(gid)
+    if not g:
+        await callback.answer("O'yin topilmadi!")
         return
 
-    if user_id not in user_carts:
-        user_carts[user_id] = []
-
-    # Takrorlanmasligi uchun tekshirish
-    if any(item["id"] == prod_id for item in user_carts[user_id]):
-        await callback.answer("✅ Bu mahsulot allaqachon savatda!")
-        return
-
-    user_carts[user_id].append({**product, "cat": cat})
-    await callback.answer(f"✅ {product['name']} savatga qo'shildi!")
-
-@dp.callback_query(F.data == "cart")
-async def show_cart(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    cart = user_carts.get(user_id, [])
-
-    if not cart:
-        await callback.message.edit_text(
-            "🛒 <b>Savatchangiz bo'sh</b>\n\nMahsulotlarni ko'rish uchun kategoriyalarni tanlang.",
-            parse_mode="HTML",
-            reply_markup=get_main_keyboard()
-        )
-        return
-
-    total = sum(item["price"] for item in cart)
-    items_text = "\n".join([f"• {item['emoji']} {item['name']} — {format_price(item['price'])}" for item in cart])
+    # Leaderboard top 3
+    top = await get_leaderboard(gid, 3)
+    medals = ["🥇","🥈","🥉"]
+    lb_text = ""
+    if top:
+        lb_text = "\n\n🏆 <b>Top o'yinchilar:</b>\n"
+        for i, row in enumerate(top):
+            name = row['full_name'] or row['username'] or "Noma'lum"
+            lb_text += f"{medals[i]} {name} — {row['best']} ball\n"
 
     text = f"""
-🛒 <b>Sizning savatchingiz:</b>
+{g['emoji']} <b>{g['name']}</b>
 
-{items_text}
+📝 {g['desc']}
+🎯 Janr: {g['genre']}
+👥 O'ynaganlar: {g['players']}
+⭐ Reyting: {g['rating']}/5.0
+💰 Mukofot: +{g['coins']} 🪙 har o'yinda
+{lb_text}"""
 
-──────────────────
-💰 <b>Jami: {format_price(total)}</b>
-    """
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="💳 Buyurtma berish", callback_data="checkout"))
-    builder.row(InlineKeyboardButton(text="🗑 Savatni tozalash", callback_data="clear_cart"))
-    builder.row(InlineKeyboardButton(text="⬅️ Bosh menyu", callback_data="back_main"))
-
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
-
-@dp.callback_query(F.data == "clear_cart")
-async def clear_cart(callback: types.CallbackQuery):
-    user_carts[callback.from_user.id] = []
-    await callback.answer("🗑 Savatcha tozalandi!")
-    await show_cart(callback)
-
-# ─── BUYURTMA ────────────────────────────────────────────────
-@dp.callback_query(F.data == "checkout")
-async def checkout(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    cart = user_carts.get(user_id, [])
-    if not cart:
-        await callback.answer("Savatcha bo'sh!")
-        return
-
-    total = sum(item["price"] for item in cart)
-    text = f"""
-💳 <b>TO'LOV</b>
-
-Jami summa: <b>{format_price(total)}</b>
-
-📱 <b>To'lov usullari:</b>
-• Payme: <code>9860 0000 0000 0000</code>
-• Click: <code>9860 0000 0000 0000</code>
-
-✅ To'lov qilganingizdan so'ng chekni shu yerga yuboring.
-📦 Mahsulot 5 daqiqa ichida yuboriladi!
-
-⚠️ <i>To'lov qilishdan oldin ma'lumotlarni tekshiring.</i>
-    """
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="✅ To'lov qildim", callback_data="payment_sent"))
-    builder.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="cart"))
-
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
-
-@dp.callback_query(F.data == "payment_sent")
-async def payment_sent(callback: types.CallbackQuery):
-    user = callback.from_user
-    cart = user_carts.get(user.id, [])
-    total = sum(item["price"] for item in cart)
-    items = "\n".join([f"• {p['name']}" for p in cart])
-
-    # Admin'ga xabar yuborish
-    admin_text = f"""
-🔔 <b>YANGI BUYURTMA!</b>
-
-👤 Mijoz: <a href="tg://user?id={user.id}">{user.full_name}</a>
-🆔 ID: <code>{user.id}</code>
-📦 Mahsulotlar:
-{items}
-💰 Summa: {format_price(total)}
-    """
-    for admin_id in ADMIN_IDS:
-        try:
-            await bot.send_message(admin_id, admin_text, parse_mode="HTML")
-        except:
-            pass
-
-    await callback.message.edit_text(
-        "✅ <b>Buyurtmangiz qabul qilindi!</b>\n\n"
-        "Adminimiz tez orada siz bilan bog'lanadi va mahsulotni yuboradi.\n\n"
-        "⏱ Kutish vaqti: 5-15 daqiqa\n\n"
-        "Rahmat! 🙏",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="🏠 Bosh menyu", callback_data="back_main")
-        ]])
+    builder.row(InlineKeyboardButton(
+        text=f"🚀 O'ynash",
+        web_app=WebAppInfo(url=f"{WEBAPP_URL}/games/{gid}")
+    ))
+    builder.row(
+        InlineKeyboardButton(text="🏆 Reyting", callback_data=f"lb_{gid}"),
+        InlineKeyboardButton(text="⬅️ Orqaga", callback_data="games_home"),
     )
-    user_carts[user.id] = []
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
 
-# ─── HAQIDA ─────────────────────────────────────────────────
-@dp.callback_query(F.data == "about")
-async def about(callback: types.CallbackQuery):
-    text = """
-🌟 <b>SUSAMBIL MARKET haqida</b>
-
-O'zbekistonning №1 raqamli mahsulotlar bozori!
-
-🎯 <b>Bizning maqsadimiz:</b>
-Har bir tadbirkorga va dasturga arzon, sifatli raqamli yechimlar taqdim etish.
-
-📊 <b>Raqamlarda:</b>
-• 50+ tayyor mahsulot
-• 500+ mamnun mijoz
-• 5⭐️ o'rtacha reyting
-
-🔒 <b>Kafolatlar:</b>
-• 100% sifat kafolati
-• 24 soat ichida yetkazib berish
-• Texnik yordam
-
-📢 Kanalimiz: @susambil_market
-    """
+# ── MINI APP'LAR ─────────────────────────────────────────────
+@dp.callback_query(F.data == "miniapps")
+async def miniapps(callback: types.CallbackQuery):
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="📢 Kanalga o'tish", url="https://t.me/susambil_market"))
+    builder.row(InlineKeyboardButton(
+        text="🧮 Biznes Kalkulator",
+        web_app=WebAppInfo(url=f"{WEBAPP_URL}/apps/calculator")
+    ))
+    builder.row(InlineKeyboardButton(
+        text="💱 Valyuta Konvertor",
+        web_app=WebAppInfo(url=f"{WEBAPP_URL}/apps/currency")
+    ))
+    builder.row(InlineKeyboardButton(
+        text="📊 CV Yaratuvchi",
+        web_app=WebAppInfo(url=f"{WEBAPP_URL}/apps/cv")
+    ))
+    builder.row(InlineKeyboardButton(
+        text="📅 Jadval Tuzuvchi",
+        web_app=WebAppInfo(url=f"{WEBAPP_URL}/apps/schedule")
+    ))
     builder.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_main"))
 
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
-
-# ─── ALOQA ───────────────────────────────────────────────────
-@dp.callback_query(F.data == "contact")
-async def contact(callback: types.CallbackQuery):
-    text = """
-📞 <b>Biz bilan bog'laning</b>
-
-🤖 Admin: @susambil_admin
-📢 Kanal: @susambil_market
-📧 Email: info@susambilmarket.uz
-
-⏰ Ish vaqti: 09:00 – 22:00
-
-💬 Savol yoki takliflaringiz bo'lsa, bemalol yozing!
-    """
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_back_keyboard())
-
-# ─── ORQAGA ──────────────────────────────────────────────────
-@dp.callback_query(F.data == "back_main")
-async def back_main(callback: types.CallbackQuery):
     await callback.message.edit_text(
-        "🌟 <b>Susambil Market</b>\n\n👇 Kategoriyani tanlang:",
-        parse_mode="HTML",
-        reply_markup=get_main_keyboard()
-    )
-
-@dp.callback_query(F.data.startswith("back_"))
-async def back_handler(callback: types.CallbackQuery):
-    await back_main(callback)
-
-# ─── ADMIN PANELI ────────────────────────────────────────────
-@dp.message(Command("admin"))
-async def admin_panel(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.answer("⛔️ Ruxsat yo'q!")
-        return
-
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="📊 Statistika", callback_data="admin_stats"))
-    builder.row(InlineKeyboardButton(text="📢 Xabar yuborish", callback_data="admin_broadcast"))
-    builder.row(InlineKeyboardButton(text="➕ Mahsulot qo'shish", callback_data="admin_add_product"))
-
-    await message.answer(
-        "👨‍💼 <b>ADMIN PANEL</b>\n\nXush kelibsiz, admin!",
-        parse_mode="HTML",
+        "🛠 <b>MINI APP'LAR</b>\n\nQulay asboblar — to'g'ridan Telegramda!",
         reply_markup=builder.as_markup()
     )
 
-@dp.callback_query(F.data == "admin_stats")
-async def admin_stats(callback: types.CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS:
+# ── PROFIL ───────────────────────────────────────────────────
+@dp.callback_query(F.data == "profile")
+async def profile(callback: types.CallbackQuery):
+    user = await get_user(callback.from_user.id)
+    if not user:
+        await callback.answer("Profil topilmadi!")
         return
 
-    total_users = len(user_carts)
-    total_products = sum(len(v) for v in PRODUCTS.values())
-
+    lvl = user['level']
     text = f"""
-📊 <b>STATISTIKA</b>
+👤 <b>PROFIL</b>
 
-👥 Faol foydalanuvchilar: {total_users}
-📦 Jami mahsulotlar: {total_products}
-🛒 Ochiq savatlar: {sum(1 for c in user_carts.values() if c)}
-    """
-    await callback.message.edit_text(text, parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="⬅️ Admin panel", callback_data="back_admin")
-        ]])
+🏷 Ism: <b>{user['full_name']}</b>
+🎖 Daraja: <b>{level_name(lvl)} (Level {lvl})</b>
+📊 Tajriba: {xp_bar(user['xp'])}
+
+💰 Coinlar: <b>{user['coins']} 🪙</b>
+🎮 O'yinlar: <b>{user['games_played']}</b>
+🏆 G'alabalar: <b>{user['wins']}</b>
+🔥 Seriya: <b>{user['streak']} kun</b>
+
+🔗 Referal: <code>https://t.me/susambilmarketbot?start=ref_{user['tg_id']}</code>
+"""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🏅 Yutuqlarim", callback_data="achievements"),
+        InlineKeyboardButton(text="📊 Statistika", callback_data="stats"),
+    )
+    builder.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_main"))
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+
+# ── LEADERBOARD ──────────────────────────────────────────────
+@dp.callback_query(F.data == "leaderboard")
+async def leaderboard(callback: types.CallbackQuery):
+    top = await get_leaderboard(limit=10)
+    medals = ["🥇","🥈","🥉"] + ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+    text = "🏆 <b>GLOBAL REYTING</b>\n\n"
+
+    if top:
+        for i, row in enumerate(top):
+            name = row['full_name'] or row['username'] or "Noma'lum"
+            text += f"{medals[i]} <b>{name}</b> — {row['coins']}🪙 · Lv.{row['level']}\n"
+    else:
+        text += "Hali o'yinchilar yo'q. Birinchi bo'ling! 🚀"
+
+    builder = InlineKeyboardBuilder()
+    for gid, g in list(GAMES.items())[:4]:
+        builder.row(InlineKeyboardButton(
+            text=f"{g['emoji']} {g['name']} reytingi",
+            callback_data=f"lb_{gid}"
+        ))
+    builder.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_main"))
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+
+@dp.callback_query(F.data.startswith("lb_"))
+async def game_leaderboard(callback: types.CallbackQuery):
+    gid = callback.data.replace("lb_", "")
+    g = GAMES.get(gid, {})
+    top = await get_leaderboard(gid, 10)
+    medals = ["🥇","🥈","🥉"] + ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+
+    text = f"🏆 <b>{g.get('name','O\'yin')} — TOP 10</b>\n\n"
+    if top:
+        for i, row in enumerate(top):
+            name = row['full_name'] or row['username'] or "Noma'lum"
+            text += f"{medals[i]} <b>{name}</b> — {row['best']} ball\n"
+    else:
+        text += "Hali hech kim o'ynamagan. Birinchi bo'ling! 🚀"
+
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text=f"🚀 O'ynash", callback_data=f"game_{gid}"),
+        InlineKeyboardButton(text="⬅️ Orqaga", callback_data="leaderboard"),
+    )
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+
+# ── KUNLIK SOVG'A ────────────────────────────────────────────
+@dp.callback_query(F.data == "daily")
+async def daily_reward(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    claimed, coins = await claim_daily(user_id)
+
+    if claimed:
+        user = await get_user(user_id)
+        await add_xp(user_id, 50)
+        text = f"""
+🎁 <b>KUNLIK SOVG'A!</b>
+
+✅ Bugungi sovg'angiz olindi!
+
+💰 +{coins} 🪙 coin
+⭐ +50 XP
+🔥 Seriya: {user['streak'] if user else 1} kun
+
+<i>Ertaga yana keling — yangi sovg'a kutmoqda!</i>
+"""
+    else:
+        text = "⏰ <b>Bugungi sovg'ani allaqachon oldingiz!</b>\n\nErtaga yana keling! 🎁"
+
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🎮 O'ynash", callback_data="games_home"),
+        InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_main"),
+    )
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+
+# ── DO'STLARNI TAKLIF ────────────────────────────────────────
+@dp.callback_query(F.data == "invite")
+async def invite(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    link = f"https://t.me/susambilmarketbot?start=ref_{user_id}"
+    text = f"""
+👥 <b>DO'STLARNI TAKLIF QIL</b>
+
+Har bir taklif qilgan do'stingiz uchun:
+🪙 +100 coin olasiz
+🌟 Do'stingiz ham +50 coin oladi
+
+📎 Sizning havola:
+<code>{link}</code>
+
+Ulashing va birga o'ynang! 🎮
+"""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(
+        text="📤 Ulashish",
+        url=f"https://t.me/share/url?url={link}&text=Susambil%20Market'da%20birga%20o'ynaylik!"
+    ))
+    builder.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_main"))
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+
+# ── MARKET ───────────────────────────────────────────────────
+@dp.callback_query(F.data == "market")
+async def market(callback: types.CallbackQuery):
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="🤖 Bot Bozor", callback_data="cat_bots"))
+    builder.row(InlineKeyboardButton(text="📦 Shablonlar", callback_data="cat_templates"))
+    builder.row(InlineKeyboardButton(text="📚 Bilim Bozori", callback_data="cat_courses"))
+    builder.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_main"))
+    await callback.message.edit_text(
+        "🛒 <b>SUSAMBIL MARKET</b>\n\nRaqamli mahsulotlar do'koni!",
+        reply_markup=builder.as_markup()
     )
 
-# ─── HEALTH CHECK SERVER (Render uxlamasligi uchun) ──────────
-from aiohttp import web
+# ── SCORE QABUL QILISH (WebApp'dan) ─────────────────────────
+@dp.message(F.web_app_data)
+async def web_app_data(message: types.Message):
+    try:
+        data = json.loads(message.web_app_data.data)
+        game_id = data.get("game_id")
+        score   = int(data.get("score", 0))
+        user_id = message.from_user.id
+
+        g = GAMES.get(game_id, {})
+        coins_earned = g.get("coins", 10)
+
+        await save_score(user_id, game_id, score)
+        await add_coins(user_id, coins_earned)
+        leveled = await add_xp(user_id, score // 10 + 20)
+
+        user = await get_user(user_id)
+        level_up_text = f"\n\n🎊 <b>LEVEL UP!</b> Siz {level_name(user['level'])} bo'ldingiz!" if leveled else ""
+
+        text = f"""
+🎮 <b>O'YIN YAKUNLANDI!</b>
+
+🎯 O'yin: {g.get('name', game_id)}
+📊 Natija: <b>{score} ball</b>
+💰 Mukofot: +{coins_earned} 🪙
+💼 Jami coin: {user['coins'] if user else '?'} 🪙
+{level_up_text}
+"""
+        builder = InlineKeyboardBuilder()
+        builder.row(
+            InlineKeyboardButton(text="🔄 Qayta", callback_data=f"game_{game_id}"),
+            InlineKeyboardButton(text="🏆 Reyting", callback_data=f"lb_{game_id}"),
+        )
+        builder.row(InlineKeyboardButton(text="🏠 Bosh menu", callback_data="back_main"))
+        await message.answer(text, reply_markup=builder.as_markup())
+    except Exception as e:
+        await message.answer(f"Xatolik: {e}")
+
+# ── YUTUQLAR ─────────────────────────────────────────────────
+@dp.callback_query(F.data == "achievements")
+async def achievements(callback: types.CallbackQuery):
+    user = await get_user(callback.from_user.id)
+    if not user:
+        await callback.answer("Profil topilmadi!")
+        return
+
+    badges = []
+    if user['games_played'] >= 1:   badges.append("🎮 Birinchi o'yin")
+    if user['games_played'] >= 10:  badges.append("🔟 10 ta o'yin")
+    if user['games_played'] >= 50:  badges.append("🏅 50 ta o'yin")
+    if user['coins'] >= 100:        badges.append("💰 100 coin")
+    if user['coins'] >= 1000:       badges.append("💎 1000 coin")
+    if user['streak'] >= 3:         badges.append("🔥 3 kunlik seriya")
+    if user['streak'] >= 7:         badges.append("⚡ Haftalik seriya")
+    if user['level'] >= 3:          badges.append("⭐ 3-daraja")
+    if user['level'] >= 5:          badges.append("🌟 5-daraja")
+
+    text = "🏅 <b>YUTUQLARIM</b>\n\n"
+    text += "\n".join([f"✅ {b}" for b in badges]) if badges else "Hali yutuq yo'q. O'ynang va yig'ing! 🎮"
+    text += f"\n\n<i>Jami: {len(badges)} ta yutuq</i>"
+
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="⬅️ Profil", callback_data="profile"))
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+
+# ── ORQAGA ────────────────────────────────────────────────────
+@dp.callback_query(F.data == "back_main")
+async def back_main(callback: types.CallbackQuery):
+    user = await get_user(callback.from_user.id)
+    coins = user['coins'] if user else 0
+    name  = callback.from_user.first_name
+    text = f"""
+🌟 <b>SUSAMBIL MARKET</b>
+
+👋 {name} | 💰 {coins} 🪙
+
+🎮 O'ynang, yig'ing, yuting!
+"""
+    await callback.message.edit_text(text, reply_markup=main_menu())
+
+# ── ADMIN ─────────────────────────────────────────────────────
+@dp.message(Command("admin"))
+async def admin(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        users  = await (await db.execute("SELECT COUNT(*) FROM users")).fetchone()
+        scores = await (await db.execute("SELECT COUNT(*) FROM scores")).fetchone()
+        coins  = await (await db.execute("SELECT SUM(coins) FROM users")).fetchone()
+
+    text = f"""
+👨‍💼 <b>ADMIN PANEL</b>
+
+👥 Foydalanuvchilar: {users[0]}
+🎮 O'yinlar o'ynalgan: {scores[0]}
+💰 Jami coinlar: {coins[0] or 0}
+"""
+    await message.answer(text)
+
+# ═══════════════════════════════════════════════════════
+#  HEALTH CHECK + ISHGA TUSHIRISH
+# ═══════════════════════════════════════════════════════
 
 async def health_check(request):
-    return web.Response(text="✅ Susambil Market Bot ishlayapti!", status=200)
+    return web.Response(text="✅ Susambil Market ishlayapti!", status=200)
 
 async def start_web_server():
     app = web.Application()
@@ -398,12 +651,12 @@ async def start_web_server():
     port = int(os.getenv("PORT", 8080))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"🌐 Health check server: http://0.0.0.0:{port}")
+    print(f"🌐 Health check: http://0.0.0.0:{port}")
 
-# ─── BOTNI ISHGA TUSHIRISH ───────────────────────────────────
 async def main():
-    print("🚀 Susambil Market Bot ishga tushdi!")
+    await init_db()
     await start_web_server()
+    print("🚀 Susambil Market Gaming Platform ishga tushdi!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
