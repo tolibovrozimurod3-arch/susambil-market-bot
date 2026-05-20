@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Biznes Kalkulator — Susambil Market</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: #0f0f17;
+    --card: #1a1a28;
+    --border: #2e2e48;
+    --accent: #7c6ef5;
+    --accent2: #f5a623;
+    --green: #3de08a;
+    --red: #f55f5f;
+    --text: #e8e8f8;
+    --muted: #7a7a9a;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    min-height: 100vh;
+    padding: 16px;
+    padding-bottom: 90px;
+  }
+
+  .header {
+    text-align: center;
+    margin-bottom: 20px;
+    padding-top: 8px;
+  }
+
+  .header .logo { font-size: 32px; margin-bottom: 6px; }
+  .header h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.5px; }
+  .header p { font-size: 13px; color: var(--muted); margin-top: 4px; }
+
+  .tabs {
+    display: flex;
+    background: var(--card);
+    border-radius: 12px;
+    padding: 4px;
+    margin-bottom: 20px;
+    border: 1px solid var(--border);
+  }
+
+  .tab {
+    flex: 1;
+    padding: 9px 4px;
+    text-align: center;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    border-radius: 9px;
+    cursor: pointer;
+    transition: all .2s;
+  }
+
+  .tab.active {
+    background: var(--accent);
+    color: #fff;
+  }
+
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 18px;
+    margin-bottom: 14px;
+  }
+
+  .card-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 14px;
+  }
+
+  .field { margin-bottom: 12px; }
+
+  .field label {
+    display: block;
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+
+  .field input, .field select {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 11px 14px;
+    color: var(--text);
+    font-size: 15px;
+    outline: none;
+    transition: border-color .2s;
+  }
+
+  .field input:focus { border-color: var(--accent); }
+
+  .calc-btn {
+    width: 100%;
+    padding: 14px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    margin-bottom: 16px;
+    transition: opacity .15s;
+  }
+
+  .calc-btn:active { opacity: .8; }
+
+  .result-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+
+  .result-item {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 12px;
+    text-align: center;
+  }
+
+  .result-label { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+
+  .result-value {
+    font-size: 18px;
+    font-weight: 700;
+  }
+
+  .result-value.green { color: var(--green); }
+  .result-value.red { color: var(--red); }
+  .result-value.yellow { color: var(--accent2); }
+  .result-value.purple { color: var(--accent); }
+
+  .margin-bar-wrap {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px;
+    margin-bottom: 14px;
+  }
+
+  .bar-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+
+  .bar-track {
+    height: 8px;
+    background: var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width .5s ease;
+  }
+
+  .suggestion {
+    background: linear-gradient(135deg, rgba(124,110,245,.15), rgba(245,166,35,.1));
+    border: 1px solid rgba(124,110,245,.3);
+    border-radius: 12px;
+    padding: 14px;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  .suggestion strong { color: var(--accent2); }
+
+  /* ROI Panel */
+  .roi-result {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    text-align: center;
+    margin-bottom: 12px;
+  }
+
+  .roi-number {
+    font-size: 42px;
+    font-weight: 800;
+    letter-spacing: -2px;
+  }
+
+  .roi-label { font-size: 13px; color: var(--muted); margin-top: 4px; }
+
+  /* Narx Panel */
+  .price-result {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+
+  .price-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+
+  .price-row .plabel { font-size: 13px; color: var(--muted); }
+  .price-row .pvalue { font-size: 15px; font-weight: 700; }
+
+  .footer-brand {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    background: var(--card);
+    border-top: 1px solid var(--border);
+    padding: 12px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .footer-brand span { color: var(--accent); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">🧮</div>
+  <h1>Biznes Kalkulator</h1>
+  <p>Foyda, ROI, narx hisob-kitobi</p>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('foydа')">💰 Foyda</div>
+  <div class="tab" onclick="switchTab('roi')">📈 ROI</div>
+  <div class="tab" onclick="switchTab('narx')">🏷 Narx</div>
+</div>
+
+<!-- FOYDA PANELI -->
+<div class="panel active" id="panel-foydа">
+  <div class="card">
+    <div class="card-title">📊 Daromad va xarajatlar</div>
+    <div class="field">
+      <label>Oylik daromad (so'm)</label>
+      <input type="number" id="d-income" placeholder="5 000 000" inputmode="numeric">
+    </div>
+    <div class="field">
+      <label>Ijara va kommunal (so'm)</label>
+      <input type="number" id="d-rent" placeholder="1 000 000" inputmode="numeric">
+    </div>
+    <div class="field">
+      <label>Maosh xarajatlar (so'm)</label>
+      <input type="number" id="d-salary" placeholder="2 000 000" inputmode="numeric">
+    </div>
+    <div class="field">
+      <label>Tovar/Xomashyo narxi (so'm)</label>
+      <input type="number" id="d-cogs" placeholder="800 000" inputmode="numeric">
+    </div>
+    <div class="field">
+      <label>Boshqa xarajatlar (so'm)</label>
+      <input type="number" id="d-other" placeholder="200 000" inputmode="numeric">
+    </div>
+  </div>
+  <button class="calc-btn" onclick="calcFoyda()">Hisoblash ✦</button>
+
+  <div id="foyda-result" style="display:none">
+    <div class="result-grid">
+      <div class="result-item">
+        <div class="result-label">Jami xarajat</div>
+        <div class="result-value red" id="r-total-cost">—</div>
+      </div>
+      <div class="result-item">
+        <div class="result-label">Sof foyda</div>
+        <div class="result-value green" id="r-profit">—</div>
+      </div>
+      <div class="result-item">
+        <div class="result-label">Foyda marjasi</div>
+        <div class="result-value yellow" id="r-margin">—</div>
+      </div>
+      <div class="result-item">
+        <div class="result-label">Yillik foyda</div>
+        <div class="result-value purple" id="r-annual">—</div>
+      </div>
+    </div>
+
+    <div class="margin-bar-wrap">
+      <div class="bar-label">
+        <span>Xarajat</span>
+        <span id="bar-pct-label">0%</span>
+        <span>Foyda</span>
+      </div>
+      <div class="bar-track">
+        <div class="bar-fill" id="profit-bar" style="width:0%; background: linear-gradient(90deg, #7c6ef5, #3de08a);"></div>
+      </div>
+    </div>
+
+    <div class="suggestion" id="foyda-tip"></div>
+  </div>
+</div>
+
+<!-- ROI PANELI -->
+<div class="panel" id="panel-roi">
+  <div class="card">
+    <div class="card-title">📈 Investitsiya rentabelligi</div>
+    <div class="field">
+      <label>Investitsiya miqdori (so'm)</label>
+      <input type="number" id="r-invest" placeholder="10 000 000" inputmode="numeric">
+    </div>
+    <div class="field">
+      <label>Olingan daromad (so'm)</label>
+      <input type="number" id="r-return" placeholder="15 000 000" inputmode="numeric">
+    </div>
+    <div class="field">
+      <label>Muddat</label>
+      <select id="r-period">
+        <option value="1">1 oy</option>
+        <option value="3">3 oy</option>
+        <option value="6">6 oy</option>
+        <option value="12" selected>1 yil</option>
+        <option value="24">2 yil</option>
+      </select>
+    </div>
+  </div>
+  <button class="calc-btn" onclick="calcROI()">Hisoblash ✦</button>
+
+  <div id="roi-result" style="display:none">
+    <div class="roi-result">
+      <div class="roi-number" id="roi-pct" style="color: var(--green)">—</div>
+      <div class="roi-label">ROI (Investitsiya rentabelligi)</div>
+    </div>
+    <div class="result-grid">
+      <div class="result-item">
+        <div class="result-label">Sof daromad</div>
+        <div class="result-value green" id="roi-net">—</div>
+      </div>
+      <div class="result-item">
+        <div class="result-label">Oylik rentabellik</div>
+        <div class="result-value yellow" id="roi-monthly">—</div>
+      </div>
+    </div>
+    <div class="suggestion" id="roi-tip"></div>
+  </div>
+</div>
+
+<!-- NARX PANELI -->
+<div class="panel" id="panel-narx">
+  <div class="card">
+    <div class="card-title">🏷 Optimal narx hisoblash</div>
+    <div class="field">
+      <label>Tannarx (so'm)</label>
+      <input type="number" id="p-cost" placeholder="50 000" inputmode="numeric">
+    </div>
+    <div class="field">
+      <label>Maqsadli foyda marjasi (%)</label>
+      <input type="number" id="p-margin" placeholder="30" inputmode="numeric">
+    </div>
+    <div class="field">
+      <label>Sotuv solig'i / QQS (%)</label>
+      <input type="number" id="p-tax" placeholder="12" inputmode="numeric">
+    </div>
+    <div class="field">
+      <label>Raqobatchi o'rtacha narxi (so'm)</label>
+      <input type="number" id="p-comp" placeholder="90 000" inputmode="numeric">
+    </div>
+  </div>
+  <button class="calc-btn" onclick="calcNarx()">Hisoblash ✦</button>
+
+  <div id="narx-result" style="display:none">
+    <div class="price-result">
+      <div class="price-row">
+        <span class="plabel">Minimal narx</span>
+        <span class="pvalue red" id="p-min">—</span>
+      </div>
+      <div class="price-row">
+        <span class="plabel">Tavsiya etilgan narx</span>
+        <span class="pvalue green" id="p-rec">—</span>
+      </div>
+      <div class="price-row">
+        <span class="plabel">Soliq bilan narx</span>
+        <span class="pvalue yellow" id="p-tax-inc">—</span>
+      </div>
+      <div class="price-row">
+        <span class="plabel">Raqobatbardosh narx</span>
+        <span class="pvalue purple" id="p-comp-rec">—</span>
+      </div>
+    </div>
+    <div class="suggestion" id="narx-tip"></div>
+  </div>
+</div>
+
+<div class="footer-brand">
+  <span>✦ Susambil Market</span> — Raqamli Mahsulotlar Bozori
+</div>
+
+<script>
+const tg = window.Telegram?.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+
+function fmt(n) {
+  return Math.round(n).toLocaleString('uz-UZ') + ' so\'m';
+}
+
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach((t,i) => {
+    const names = ['foydа','roi','narx'];
+    t.classList.toggle('active', names[i] === name);
+  });
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('panel-' + name).classList.add('active');
+}
+
+function calcFoyda() {
+  const income = +document.getElementById('d-income').value || 0;
+  const rent   = +document.getElementById('d-rent').value || 0;
+  const salary = +document.getElementById('d-salary').value || 0;
+  const cogs   = +document.getElementById('d-cogs').value || 0;
+  const other  = +document.getElementById('d-other').value || 0;
+
+  const totalCost = rent + salary + cogs + other;
+  const profit = income - totalCost;
+  const margin = income > 0 ? (profit / income * 100) : 0;
+  const annual = profit * 12;
+  const barPct = Math.max(0, Math.min(100, margin));
+
+  document.getElementById('r-total-cost').textContent = fmt(totalCost);
+  document.getElementById('r-profit').textContent = fmt(profit);
+  document.getElementById('r-margin').textContent = Math.round(margin) + '%';
+  document.getElementById('r-annual').textContent = fmt(annual);
+  document.getElementById('profit-bar').style.width = barPct + '%';
+  document.getElementById('bar-pct-label').textContent = Math.round(margin) + '%';
+
+  let tip = '';
+  if (profit < 0) {
+    tip = '<strong>⚠️ Zarar!</strong> Xarajatlaringiz daromaddan yuqori. Ijara yoki xomashyo narxini qisqartirishni ko\'rib chiqing.';
+  } else if (margin < 10) {
+    tip = '<strong>📉 Past marjа.</strong> 10% dan past foyda xavfli. Narxni oshirish yoki xarajatni kamaytirish kerak.';
+  } else if (margin < 25) {
+    tip = '<strong>✅ Normal holat.</strong> Foyda marjasi maqbul, lekin optimallashtirish imkoni bor.';
+  } else {
+    tip = '<strong>🚀 Ajoyib!</strong> ' + Math.round(margin) + '% marja — bu juda yaxshi ko\'rsatkich!';
+  }
+  document.getElementById('foyda-tip').innerHTML = tip;
+  document.getElementById('foyda-result').style.display = 'block';
+}
+
+function calcROI() {
+  const invest  = +document.getElementById('r-invest').value || 0;
+  const ret     = +document.getElementById('r-return').value || 0;
+  const period  = +document.getElementById('r-period').value || 12;
+
+  const net = ret - invest;
+  const roi = invest > 0 ? (net / invest * 100) : 0;
+  const monthly = roi / period;
+
+  const el = document.getElementById('roi-pct');
+  el.textContent = Math.round(roi) + '%';
+  el.style.color = roi >= 0 ? 'var(--green)' : 'var(--red)';
+
+  document.getElementById('roi-net').textContent = fmt(net);
+  document.getElementById('roi-monthly').textContent = Math.round(monthly) + '%/oy';
+
+  let tip = '';
+  if (roi < 0) {
+    tip = '<strong>⚠️ Zarar!</strong> Investitsiya o\'zini oqlamadi. Xarajatlarni qayta ko\'rib chiqing.';
+  } else if (roi < 20) {
+    tip = '<strong>📊 Past ROI.</strong> Yiliga 20% dan past ROI — bank depozitidan yaxshiroq emas. Yaxshilash kerak.';
+  } else if (roi < 100) {
+    tip = '<strong>✅ Yaxshi ROI.</strong> Investitsiya o\'zini oqlayapti. Kengaytirish mumkin.';
+  } else {
+    tip = '<strong>🔥 Zo\'r ROI!</strong> ' + Math.round(roi) + '% — bu biznesingiz juda samarali ishlayapti!';
+  }
+  document.getElementById('roi-tip').innerHTML = tip;
+  document.getElementById('roi-result').style.display = 'block';
+}
+
+function calcNarx() {
+  const cost   = +document.getElementById('p-cost').value || 0;
+  const margin = +document.getElementById('p-margin').value || 30;
+  const tax    = +document.getElementById('p-tax').value || 0;
+  const comp   = +document.getElementById('p-comp').value || 0;
+
+  const minPrice  = cost * 1.05;
+  const recPrice  = cost / (1 - margin / 100);
+  const taxPrice  = recPrice * (1 + tax / 100);
+  const compRec   = comp > 0 ? comp * 0.95 : recPrice;
+
+  document.getElementById('p-min').textContent     = fmt(minPrice);
+  document.getElementById('p-rec').textContent     = fmt(recPrice);
+  document.getElementById('p-tax-inc').textContent = fmt(taxPrice);
+  document.getElementById('p-comp-rec').textContent = fmt(compRec);
+
+  let tip = '';
+  if (comp > 0 && recPrice > comp) {
+    tip = `<strong>⚠️ Narxingiz raqobatchinikidan yuqori!</strong> Tannarxni kamaytiring yoki qo'shimcha qiymat qo'shing.`;
+  } else if (comp > 0 && recPrice < comp * 0.8) {
+    tip = `<strong>💡 Narxingizni oshirish mumkin.</strong> Raqobatchinikidan ancha arzon sotayapsiz — bu foydani kamaytiradi.`;
+  } else {
+    tip = `<strong>✅ Maqbul narx!</strong> Tavsiya etilgan narx raqobatbardosh va foydali.`;
+  }
+  document.getElementById('narx-tip').innerHTML = tip;
+  document.getElementById('narx-result').style.display = 'block';
+}
+</script>
+</body>
+</html>

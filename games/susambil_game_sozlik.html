@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>So'zlik — O'zbek So'z O'yini</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: #111118;
+    --card: #1c1c2a;
+    --border: #2d2d44;
+    --correct: #3a8f5a;
+    --present: #b59a2a;
+    --absent: #3a3a50;
+    --key-bg: #2a2a3e;
+    --text: #f0f0f8;
+    --muted: #7070a0;
+    --accent: #7c6ef5;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; user-select:none; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 12px 8px;
+  }
+
+  .header {
+    width: 100%;
+    max-width: 380px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 16px;
+  }
+
+  .header h1 { font-size: 22px; font-weight: 800; letter-spacing: -0.5px; }
+  .header .sub { font-size: 11px; color: var(--muted); }
+
+  .stats-row {
+    display: flex;
+    gap: 8px;
+    width: 100%;
+    max-width: 380px;
+    margin-bottom: 14px;
+  }
+
+  .stat {
+    flex: 1;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px;
+    text-align: center;
+  }
+
+  .stat-val { font-size: 20px; font-weight: 700; }
+  .stat-lab { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+  /* GRID */
+  .grid {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 16px;
+    width: 100%;
+    max-width: 320px;
+  }
+
+  .row { display: flex; gap: 6px; justify-content: center; }
+
+  .cell {
+    width: 56px; height: 56px;
+    border: 2px solid var(--border);
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    font-weight: 800;
+    text-transform: uppercase;
+    transition: all .1s;
+    background: var(--card);
+    letter-spacing: 0;
+  }
+
+  .cell.filled { border-color: var(--muted); }
+  .cell.correct { background: var(--correct); border-color: var(--correct); color: #fff; }
+  .cell.present { background: var(--present); border-color: var(--present); color: #fff; }
+  .cell.absent  { background: var(--absent); border-color: var(--absent); color: var(--muted); }
+
+  .cell.pop { animation: pop .1s ease; }
+  @keyframes pop {
+    0%   { transform: scale(1); }
+    50%  { transform: scale(1.12); }
+    100% { transform: scale(1); }
+  }
+
+  .cell.shake { animation: shake .4s ease; }
+  @keyframes shake {
+    0%,100% { transform: translateX(0); }
+    20%      { transform: translateX(-6px); }
+    40%      { transform: translateX(6px); }
+    60%      { transform: translateX(-4px); }
+    80%      { transform: translateX(4px); }
+  }
+
+  .cell.flip { animation: flip .5s ease; }
+  @keyframes flip {
+    0%   { transform: rotateX(0); }
+    50%  { transform: rotateX(90deg); }
+    100% { transform: rotateX(0); }
+  }
+
+  /* KEYBOARD */
+  .keyboard {
+    width: 100%;
+    max-width: 400px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 0 4px;
+  }
+
+  .kb-row { display: flex; gap: 5px; justify-content: center; }
+
+  .key {
+    height: 48px;
+    min-width: 32px;
+    padding: 0 6px;
+    border-radius: 8px;
+    border: none;
+    background: var(--key-bg);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background .15s;
+    flex: 1;
+    max-width: 40px;
+  }
+
+  .key.wide { max-width: 62px; font-size: 11px; }
+  .key.correct { background: var(--correct); }
+  .key.present { background: var(--present); }
+  .key.absent  { background: var(--absent); color: var(--muted); }
+  .key:active  { opacity: .7; }
+
+  /* TOAST */
+  .toast {
+    position: fixed;
+    top: 70px;
+    left: 50%;
+    transform: translateX(-50%) translateY(-20px);
+    background: var(--text);
+    color: var(--bg);
+    padding: 10px 20px;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: 700;
+    opacity: 0;
+    transition: all .3s;
+    pointer-events: none;
+    white-space: nowrap;
+    z-index: 100;
+  }
+
+  .toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  /* WIN MODAL */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .3s;
+  }
+
+  .modal-overlay.show { opacity: 1; pointer-events: all; }
+
+  .modal {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 28px 24px;
+    text-align: center;
+    max-width: 300px;
+    width: 90%;
+    transform: scale(.9);
+    transition: transform .3s;
+  }
+
+  .modal-overlay.show .modal { transform: scale(1); }
+
+  .modal .emoji { font-size: 48px; margin-bottom: 10px; }
+  .modal h2 { font-size: 22px; font-weight: 800; margin-bottom: 6px; }
+  .modal p { font-size: 14px; color: var(--muted); margin-bottom: 18px; line-height: 1.5; }
+
+  .modal .answer-reveal {
+    background: var(--bg);
+    border-radius: 10px;
+    padding: 12px;
+    margin-bottom: 18px;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    color: var(--accent);
+    text-transform: uppercase;
+  }
+
+  .modal-btn {
+    width: 100%;
+    padding: 13px;
+    border-radius: 12px;
+    border: none;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    margin-bottom: 8px;
+    transition: opacity .15s;
+  }
+
+  .modal-btn:active { opacity: .8; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-ghost   { background: var(--key-bg); color: var(--text); }
+
+  .brand {
+    margin-top: 14px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .brand span { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>So'zlik 🔤</h1>
+    <div class="sub">5 harfli so'zni top!</div>
+  </div>
+  <div style="text-align:right">
+    <div style="font-size:11px; color:var(--muted);">Urinish</div>
+    <div id="attempt-counter" style="font-size:18px; font-weight:700;">1/6</div>
+  </div>
+</div>
+
+<div class="stats-row">
+  <div class="stat">
+    <div class="stat-val" id="s-played">0</div>
+    <div class="stat-lab">O'yin</div>
+  </div>
+  <div class="stat">
+    <div class="stat-val" id="s-wins">0</div>
+    <div class="stat-lab">G'alaba</div>
+  </div>
+  <div class="stat">
+    <div class="stat-val" id="s-streak">0</div>
+    <div class="stat-lab">Seriya</div>
+  </div>
+  <div class="stat">
+    <div class="stat-val" id="s-winpct">0%</div>
+    <div class="stat-lab">G'alaba%</div>
+  </div>
+</div>
+
+<div class="grid" id="grid"></div>
+
+<div class="keyboard" id="keyboard">
+  <div class="kb-row" id="kb-row-1"></div>
+  <div class="kb-row" id="kb-row-2"></div>
+  <div class="kb-row" id="kb-row-3"></div>
+</div>
+
+<div class="brand">✦ <span>Susambil Market</span> — Raqamli Bozor</div>
+
+<div class="toast" id="toast"></div>
+
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <div class="emoji" id="m-emoji">🎉</div>
+    <h2 id="m-title">Barakalla!</h2>
+    <p id="m-desc">To'g'ri topdingiz!</p>
+    <div class="answer-reveal" id="m-answer"></div>
+    <button class="modal-btn btn-primary" onclick="newGame()">🔄 Yangi o'yin</button>
+    <button class="modal-btn btn-ghost" onclick="shareResult()">📤 Ulashish</button>
+  </div>
+</div>
+
+<script>
+const tg = window.Telegram?.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+
+const WORDS = [
+  'kitob','kanal','bozor','qalam','chizma','olma','nok','uzum','anor','limon',
+  'savat','eshik','deraza','stol','stul','qozon','idish','bolta','pichoq','qaychi',
+  'shamol','yomgir','quyosh','oy','yulduz','bulut','tuman','qor','muzqaymoq',
+  'mashina','velosiped','samolyot','kemа','poyezd','avtomobil',
+  'maktab','kutubxona','shifoxona','do\'kon','bozor',
+  'choynak','piyola','likop','vilka','qoshiq',
+  'qizil','yashil','moviy','sariq','oq','qora','kulrang',
+  'bahor','yoz','kuz','qish',
+  'otа','ona','aka','uka','opa','singil',
+  'kitob','daftar','qalam','ruchka','o\'chirg\'ich',
+  'muzey','teatr','kino','stadion',
+  'palov','shurva','lag\'mon','manti','somsa',
+  'suv','choy','qahva','sharbat','kola',
+];
+
+function getFiveLetterWords() {
+  return WORDS.filter(w => [...w].length === 5);
+}
+
+const FIVE_WORDS = getFiveLetterWords().length > 0
+  ? getFiveLetterWords()
+  : ['kitob','kanal','bozor','qalam','savat','eshik','stol','olma','nok','uzum'];
+
+const KB_ROWS = [
+  ['Q','W','E','R','T','Y','U','I','O','P'],
+  ["A","S","D","F","G","H","J","K","L"],
+  ['O\'','Z','X','C','V','B','N","M','⌫'],
+];
+
+const UZ_ROWS = [
+  ['q','w','e','r','t','y','u','i','o','p'],
+  ['a','s','d','f','g','h','j','k','l'],
+  ["o'","z","x","c","v","b","n","m","⌫"],
+];
+
+let target = '';
+let currentRow = 0;
+let currentCol = 0;
+let currentGuess = [];
+let gameOver = false;
+let keyStates = {};
+
+let stats = JSON.parse(localStorage.getItem('sozlik_stats') || '{"played":0,"wins":0,"streak":0,"maxStreak":0}');
+
+function init() {
+  target = FIVE_WORDS[Math.floor(Math.random() * FIVE_WORDS.length)];
+  currentRow = 0;
+  currentCol = 0;
+  currentGuess = [];
+  gameOver = false;
+  keyStates = {};
+  buildGrid();
+  buildKeyboard();
+  updateStats();
+}
+
+function buildGrid() {
+  const grid = document.getElementById('grid');
+  grid.innerHTML = '';
+  for (let r = 0; r < 6; r++) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.id = 'row-' + r;
+    for (let c = 0; c < 5; c++) {
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      cell.id = `cell-${r}-${c}`;
+      row.appendChild(cell);
+    }
+    grid.appendChild(row);
+  }
+}
+
+function buildKeyboard() {
+  UZ_ROWS.forEach((row, ri) => {
+    const rowEl = document.getElementById('kb-row-' + (ri+1));
+    rowEl.innerHTML = '';
+    if (ri === 2) {
+      const enterKey = document.createElement('button');
+      enterKey.className = 'key wide';
+      enterKey.textContent = 'Kiritish';
+      enterKey.onclick = () => submitGuess();
+      rowEl.appendChild(enterKey);
+    }
+    row.forEach(letter => {
+      const key = document.createElement('button');
+      key.className = 'key';
+      key.textContent = letter === '⌫' ? '⌫' : letter;
+      key.id = 'key-' + letter;
+      if (letter === '⌫') {
+        key.onclick = () => deleteLetter();
+      } else {
+        key.onclick = () => addLetter(letter);
+      }
+      rowEl.appendChild(key);
+    });
+  });
+}
+
+function addLetter(letter) {
+  if (gameOver || currentCol >= 5) return;
+  currentGuess.push(letter);
+  const cell = document.getElementById(`cell-${currentRow}-${currentCol}`);
+  cell.textContent = letter.toUpperCase();
+  cell.classList.add('filled','pop');
+  setTimeout(() => cell.classList.remove('pop'), 150);
+  currentCol++;
+  updateCounter();
+}
+
+function deleteLetter() {
+  if (gameOver || currentCol <= 0) return;
+  currentCol--;
+  currentGuess.pop();
+  const cell = document.getElementById(`cell-${currentRow}-${currentCol}`);
+  cell.textContent = '';
+  cell.classList.remove('filled');
+}
+
+function submitGuess() {
+  if (gameOver) return;
+  if (currentCol < 5) {
+    showToast("5 ta harf kiriting!");
+    shakeRow(currentRow);
+    return;
+  }
+
+  const guess = currentGuess.join('');
+  const result = evaluateGuess(guess, target);
+
+  animateRow(currentRow, result, guess);
+
+  if (guess === target) {
+    setTimeout(() => {
+      stats.played++;
+      stats.wins++;
+      stats.streak++;
+      if (stats.streak > stats.maxStreak) stats.maxStreak = stats.streak;
+      saveStats();
+      updateStats();
+      showModal(true, currentRow + 1);
+    }, 1800);
+    gameOver = true;
+  } else {
+    currentRow++;
+    currentCol = 0;
+    currentGuess = [];
+    if (currentRow >= 6) {
+      setTimeout(() => {
+        stats.played++;
+        stats.streak = 0;
+        saveStats();
+        updateStats();
+        showModal(false, 0);
+      }, 1800);
+      gameOver = true;
+    }
+  }
+  updateCounter();
+}
+
+function evaluateGuess(guess, target) {
+  const result = Array(5).fill('absent');
+  const targetArr = [...target];
+  const guessArr = [...guess];
+  const used = Array(5).fill(false);
+
+  for (let i = 0; i < 5; i++) {
+    if (guessArr[i] === targetArr[i]) {
+      result[i] = 'correct';
+      used[i] = true;
+    }
+  }
+  for (let i = 0; i < 5; i++) {
+    if (result[i] === 'correct') continue;
+    for (let j = 0; j < 5; j++) {
+      if (!used[j] && guessArr[i] === targetArr[j]) {
+        result[i] = 'present';
+        used[j] = true;
+        break;
+      }
+    }
+  }
+  return result;
+}
+
+function animateRow(row, result, guess) {
+  const guessArr = [...guess];
+  for (let c = 0; c < 5; c++) {
+    const cell = document.getElementById(`cell-${row}-${c}`);
+    setTimeout(() => {
+      cell.classList.add('flip');
+      setTimeout(() => {
+        cell.classList.add(result[c]);
+        cell.classList.remove('flip');
+        updateKeyState(guessArr[c], result[c]);
+      }, 250);
+    }, c * 120);
+  }
+}
+
+function updateKeyState(letter, state) {
+  const priority = { correct: 3, present: 2, absent: 1 };
+  const cur = keyStates[letter];
+  if (!cur || priority[state] > priority[cur]) {
+    keyStates[letter] = state;
+    const key = document.getElementById('key-' + letter);
+    if (key) {
+      key.classList.remove('correct','present','absent');
+      key.classList.add(state);
+    }
+  }
+}
+
+function shakeRow(row) {
+  const rowEl = document.getElementById('row-' + row);
+  rowEl.querySelectorAll('.cell').forEach(c => {
+    c.classList.add('shake');
+    setTimeout(() => c.classList.remove('shake'), 400);
+  });
+}
+
+function updateCounter() {
+  document.getElementById('attempt-counter').textContent =
+    `${Math.min(currentRow + 1, 6)}/6`;
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 1800);
+}
+
+function showModal(won, attempts) {
+  const msgs = ['Dahshat!🔥','Ajoyib!⭐','Yaxshi!👏','Zo\'r!✨','Barakalla!🎉','Yutdingiz!😊'];
+  document.getElementById('m-emoji').textContent = won ? '🎉' : '😔';
+  document.getElementById('m-title').textContent = won ? msgs[attempts-1] || 'Yutdingiz!' : 'Keyingisida!';
+  document.getElementById('m-desc').textContent = won
+    ? `${attempts} ta urinishda topdingiz!`
+    : 'So\'z topilmadi. Keyingi safar omad!';
+  document.getElementById('m-answer').textContent = target.toUpperCase();
+  document.getElementById('modal').classList.add('show');
+}
+
+function shareResult() {
+  const grid = [];
+  for (let r = 0; r < Math.min(currentRow + 1, 6); r++) {
+    let row = '';
+    for (let c = 0; c < 5; c++) {
+      const cell = document.getElementById(`cell-${r}-${c}`);
+      if (cell.classList.contains('correct')) row += '🟩';
+      else if (cell.classList.contains('present')) row += '🟨';
+      else row += '⬛';
+    }
+    grid.push(row);
+  }
+  const text = `So'zlik 🔤\n${grid.join('\n')}\n\n✦ Susambil Market`;
+  if (tg?.shareText) tg.shareText(text);
+  else { navigator.clipboard?.writeText(text); showToast('Nusxalandi!'); }
+}
+
+function newGame() {
+  document.getElementById('modal').classList.remove('show');
+  init();
+}
+
+function updateStats() {
+  document.getElementById('s-played').textContent = stats.played;
+  document.getElementById('s-wins').textContent = stats.wins;
+  document.getElementById('s-streak').textContent = stats.streak;
+  const pct = stats.played > 0 ? Math.round(stats.wins / stats.played * 100) : 0;
+  document.getElementById('s-winpct').textContent = pct + '%';
+}
+
+function saveStats() {
+  localStorage.setItem('sozlik_stats', JSON.stringify(stats));
+}
+
+document.addEventListener('keydown', e => {
+  if (gameOver) return;
+  if (e.key === 'Enter') { submitGuess(); return; }
+  if (e.key === 'Backspace') { deleteLetter(); return; }
+  const letter = e.key.toLowerCase();
+  if (/^[a-z']$/.test(letter)) addLetter(letter);
+});
+
+init();
+</script>
+</body>
+</html>
