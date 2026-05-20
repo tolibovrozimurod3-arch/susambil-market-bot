@@ -12,6 +12,7 @@ import asyncio
 from datetime import datetime, date
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
+from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart, Command
 from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton,
@@ -30,7 +31,7 @@ WEBAPP_URL  = os.getenv("WEBAPP_URL", "https://susambil.vercel.app")
 DB_PATH     = os.getenv("DB_PATH", "susambil.db")
 
 logging.basicConfig(level=logging.INFO)
-bot = Bot(token=BOT_TOKEN, parse_mode="HTML")
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp  = Dispatcher()
 
 # ═══════════════════════════════════════════════════════
