@@ -1,0 +1,7 @@
+# Muhim — bu fayllar Git'ga yuklanmasin!
+.env
+*.db
+__pycache__/
+*.pyc
+venv/
+.venv/
