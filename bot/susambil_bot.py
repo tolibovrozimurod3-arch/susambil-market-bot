@@ -1,664 +1,750 @@
 """
 ╔══════════════════════════════════════════════════════╗
-║        SUSAMBIL MARKET — GAMING PLATFORM 🎮          ║
-║   O'zbekistonning №1 O'yin va Mini App Platformasi   ║
+║       SUSAMBIL MARKET BOT — Admin CMS + WebApp       ║
 ╚══════════════════════════════════════════════════════╝
 """
 
-import logging
-import os
-import json
-import asyncio
-from datetime import datetime, date
+import logging, os, json, asyncio
+from datetime import datetime
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.client.default import DefaultBotProperties
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart, Command, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton,
-    WebAppInfo, InlineQueryResultArticle, InputTextMessageContent
+    ReplyKeyboardMarkup, KeyboardButton,
+    ReplyKeyboardRemove, WebAppInfo
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.client.default import DefaultBotProperties
 from aiohttp import web
 import aiosqlite
 
 load_dotenv()
 
-BOT_TOKEN   = os.getenv("BOT_TOKEN")
-ADMIN_IDS   = list(map(int, os.getenv("ADMIN_IDS", "0").split(",")))
-CHANNEL     = os.getenv("CHANNEL_ID", "@susambilmarket")
-WEBAPP_URL  = os.getenv("WEBAPP_URL", "https://susambil.vercel.app")
-DB_PATH     = os.getenv("DB_PATH", "susambil.db")
+BOT_TOKEN  = os.getenv("BOT_TOKEN")
+ADMIN_IDS  = list(map(int, os.getenv("ADMIN_IDS", "0").split(",")))
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://susambil-webapp.vercel.app")
+DB_PATH    = os.getenv("DB_PATH", "susambil.db")
+PORT       = int(os.getenv("PORT", 8080))
 
 logging.basicConfig(level=logging.INFO)
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
-dp  = Dispatcher()
+log = logging.getLogger(__name__)
 
-# ═══════════════════════════════════════════════════════
-#  MA'LUMOTLAR BAZASI
-# ═══════════════════════════════════════════════════════
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+dp  = Dispatcher(storage=MemoryStorage())
+
+# ═══════════════════════════════════════════
+# DATABASE
+# ═══════════════════════════════════════════
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.executescript("""
+            CREATE TABLE IF NOT EXISTS items (
+                id          TEXT PRIMARY KEY,
+                category    TEXT NOT NULL,
+                name_uz     TEXT NOT NULL,
+                name_en     TEXT DEFAULT '',
+                name_ru     TEXT DEFAULT '',
+                desc_uz     TEXT DEFAULT '',
+                desc_en     TEXT DEFAULT '',
+                desc_ru     TEXT DEFAULT '',
+                url         TEXT DEFAULT '',
+                img_url     TEXT DEFAULT '',
+                file_type   TEXT DEFAULT '',
+                file_size   TEXT DEFAULT '',
+                color       TEXT DEFAULT '#6d28d9,#7c3aed',
+                price       INTEGER DEFAULT 0,
+                badge       TEXT DEFAULT '',
+                rating      REAL DEFAULT 0.0,
+                users       TEXT DEFAULT '0',
+                action      TEXT DEFAULT 'open',
+                active      INTEGER DEFAULT 1,
+                created_at  TEXT DEFAULT (datetime('now'))
+            );
             CREATE TABLE IF NOT EXISTS users (
                 tg_id       INTEGER PRIMARY KEY,
                 username    TEXT,
                 full_name   TEXT,
-                coins       INTEGER DEFAULT 0,
-                level       INTEGER DEFAULT 1,
-                xp          INTEGER DEFAULT 0,
-                games_played INTEGER DEFAULT 0,
-                wins        INTEGER DEFAULT 0,
-                streak      INTEGER DEFAULT 0,
-                last_daily  TEXT DEFAULT '',
-                joined_at   TEXT DEFAULT (datetime('now')),
-                invited_by  INTEGER DEFAULT 0
-            );
-
-            CREATE TABLE IF NOT EXISTS scores (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id     INTEGER,
-                game_id     TEXT,
-                score       INTEGER,
-                played_at   TEXT DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS achievements (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id     INTEGER,
-                badge       TEXT,
-                earned_at   TEXT DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS daily_tasks (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id     INTEGER,
-                task        TEXT,
-                done        INTEGER DEFAULT 0,
-                task_date   TEXT
+                joined_at   TEXT DEFAULT (datetime('now'))
             );
         """)
         await db.commit()
+    log.info("✅ DB tayyor")
 
-async def get_user(tg_id):
+async def save_item(item: dict):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT OR REPLACE INTO items
+            (id,category,name_uz,name_en,name_ru,desc_uz,desc_en,desc_ru,
+             url,img_url,file_type,file_size,color,price,badge,rating,users,action)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            item.get('id'), item.get('category'),
+            item.get('name_uz',''), item.get('name_en',''), item.get('name_ru',''),
+            item.get('desc_uz',''), item.get('desc_en',''), item.get('desc_ru',''),
+            item.get('url',''), item.get('img_url',''),
+            item.get('file_type',''), item.get('file_size',''),
+            item.get('color','#6d28d9,#7c3aed'),
+            item.get('price', 0), item.get('badge',''),
+            item.get('rating', 0.0), item.get('users','0'),
+            item.get('action','open')
+        ))
+        await db.commit()
+
+async def get_items(category=None):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM users WHERE tg_id=?", (tg_id,)) as cur:
-            return await cur.fetchone()
-
-async def create_user(tg_id, username, full_name, invited_by=0):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT OR IGNORE INTO users (tg_id,username,full_name,invited_by) VALUES (?,?,?,?)",
-            (tg_id, username, full_name, invited_by)
-        )
-        await db.commit()
-
-async def add_coins(tg_id, amount):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE users SET coins=coins+? WHERE tg_id=?", (amount, tg_id))
-        await db.commit()
-
-async def add_xp(tg_id, xp):
-    async with aiosqlite.connect(DB_PATH) as db:
-        user = await get_user(tg_id)
-        if not user: return
-        new_xp = user['xp'] + xp
-        new_level = 1 + new_xp // 500  # har 500 XP = 1 level
-        await db.execute(
-            "UPDATE users SET xp=?, level=? WHERE tg_id=?",
-            (new_xp, new_level, tg_id)
-        )
-        await db.commit()
-        return new_level > user['level']  # level oshganini qaytaradi
-
-async def save_score(user_id, game_id, score):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO scores (user_id,game_id,score) VALUES (?,?,?)",
-            (user_id, game_id, score)
-        )
-        await db.execute("UPDATE users SET games_played=games_played+1 WHERE tg_id=?", (user_id,))
-        await db.commit()
-
-async def get_leaderboard(game_id=None, limit=10):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        if game_id:
-            query = """
-                SELECT u.full_name, u.username, MAX(s.score) as best, u.level
-                FROM scores s JOIN users u ON s.user_id=u.tg_id
-                WHERE s.game_id=?
-                GROUP BY s.user_id ORDER BY best DESC LIMIT ?
-            """
-            async with db.execute(query, (game_id, limit)) as cur:
-                return await cur.fetchall()
+        if category:
+            cur = await db.execute(
+                "SELECT * FROM items WHERE category=? AND active=1 ORDER BY created_at DESC",
+                (category,)
+            )
         else:
-            query = """
-                SELECT full_name, username, coins, level, xp, games_played
-                FROM users ORDER BY coins DESC LIMIT ?
-            """
-            async with db.execute(query, (limit,)) as cur:
-                return await cur.fetchall()
+            cur = await db.execute(
+                "SELECT * FROM items WHERE active=1 ORDER BY created_at DESC"
+            )
+        return [dict(r) for r in await cur.fetchall()]
 
-async def claim_daily(tg_id):
-    today = date.today().isoformat()
+async def delete_item(item_id: str):
     async with aiosqlite.connect(DB_PATH) as db:
-        user = await get_user(tg_id)
-        if user and user['last_daily'] == today:
-            return False, 0
-        streak = (user['streak'] + 1) if user else 1
-        coins = 50 + (streak * 10)  # streak bonus
-        await db.execute(
-            "UPDATE users SET coins=coins+?, last_daily=?, streak=? WHERE tg_id=?",
-            (coins, today, streak, tg_id)
-        )
+        await db.execute("UPDATE items SET active=0 WHERE id=?", (item_id,))
         await db.commit()
-        return True, coins
 
-# ═══════════════════════════════════════════════════════
-#  O'YIN KATALOGI
-# ═══════════════════════════════════════════════════════
+async def get_stats():
+    async with aiosqlite.connect(DB_PATH) as db:
+        cats = ['games','apps','images','files']
+        result = {}
+        for cat in cats:
+            row = await (await db.execute(
+                "SELECT COUNT(*) FROM items WHERE category=? AND active=1", (cat,)
+            )).fetchone()
+            result[cat] = row[0] if row else 0
+        total_users = (await (await db.execute("SELECT COUNT(*) FROM users")).fetchone())[0]
+        result['users'] = total_users
+        return result
 
-GAMES = {
-    "sozlik": {
-        "name": "🔤 So'zlik",
-        "desc": "5 harfli o'zbek so'zini top! Wordle o'zbek tilida.",
-        "genre": "🧠 Mantiq",
-        "players": "12.5K",
-        "rating": "4.9",
-        "coins": 20,
-        "emoji": "🔤",
-    },
-    "calculator": {
-        "name": "🧮 Biznes Kalkulator",
-        "desc": "Foyda, ROI va narx hisoblash mini ilovasi.",
-        "genre": "🛠 Asbob",
-        "players": "8.2K",
-        "rating": "4.8",
-        "coins": 0,
-        "emoji": "🧮",
-    },
-    "quiz_uz": {
-        "name": "❓ Bilim Bellashuvi",
-        "desc": "O'zbekiston tarixi, geografiya, fan bo'yicha test.",
-        "genre": "🎓 Bilim",
-        "players": "5.1K",
-        "rating": "4.7",
-        "coins": 30,
-        "emoji": "❓",
-    },
-    "math_duel": {
-        "name": "🔢 Tez Hisob",
-        "desc": "30 soniyada imkon qadar ko'p misol yesh!",
-        "genre": "⚡ Tezkor",
-        "players": "9.8K",
-        "rating": "4.8",
-        "coins": 25,
-        "emoji": "🔢",
-    },
-    "memory": {
-        "name": "🃏 Xotira O'yini",
-        "desc": "Kartochkalarni juftlab top — xotirangni sinab ko'r!",
-        "genre": "🧩 Puzzle",
-        "players": "7.3K",
-        "rating": "4.6",
-        "coins": 15,
-        "emoji": "🃏",
-    },
-    "currency": {
-        "name": "💱 Valyuta",
-        "desc": "Real vaqt valyuta kurslari konvertori.",
-        "genre": "🛠 Asbob",
-        "players": "4.5K",
-        "rating": "4.7",
-        "coins": 0,
-        "emoji": "💱",
-    },
-}
+# ═══════════════════════════════════════════
+# FSM STATES
+# ═══════════════════════════════════════════
 
-GENRES = {
-    "🧠 Mantiq": ["sozlik"],
-    "⚡ Tezkor": ["math_duel"],
-    "🎓 Bilim":  ["quiz_uz"],
-    "🧩 Puzzle": ["memory"],
-    "🛠 Asbob":  ["calculator", "currency"],
-}
+class AddItem(StatesGroup):
+    category  = State()
+    name_uz   = State()
+    name_en   = State()
+    name_ru   = State()
+    desc_uz   = State()
+    url       = State()
+    img_url   = State()
+    file_type = State()
+    file_size = State()
+    color     = State()
+    price     = State()
+    badge     = State()
+    confirm   = State()
 
-LEVEL_NAMES = {
-    1: "🌱 Yangi boshlovchi",
-    2: "⭐ O'rganuvchi",
-    3: "🌟 Faol o'yinchi",
-    4: "💫 Tajribali",
-    5: "🔥 Ustoz",
-    6: "💎 Mestr",
-    7: "👑 Chempion",
-    8: "🏆 Legend",
-    9: "🌈 Superstar",
-    10: "🚀 Susambil Pro",
-}
+# ═══════════════════════════════════════════
+# KEYBOARDS
+# ═══════════════════════════════════════════
 
-def level_name(level):
-    return LEVEL_NAMES.get(min(level, 10), "🚀 Susambil Pro")
-
-def xp_bar(xp):
-    filled = (xp % 500) // 50
-    bar = "█" * filled + "░" * (10 - filled)
-    return f"[{bar}] {xp%500}/500 XP"
-
-# ═══════════════════════════════════════════════════════
-#  KLAVIATURALAR
-# ═══════════════════════════════════════════════════════
-
-def main_menu():
+def kb_main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🌐 Ilovani ochish", web_app=WebAppInfo(url=WEBAPP_URL))],
         [
-            InlineKeyboardButton(text="🎮 O'yinlar", callback_data="games_home"),
-            InlineKeyboardButton(text="🛠 Mini App'lar", callback_data="miniapps"),
+            InlineKeyboardButton(text="🎮 O'yinlar", callback_data="tab_games"),
+            InlineKeyboardButton(text="📱 Ilovalar", callback_data="tab_apps"),
         ],
         [
-            InlineKeyboardButton(text="👤 Profilim", callback_data="profile"),
-            InlineKeyboardButton(text="🏆 Reyting", callback_data="leaderboard"),
-        ],
-        [
-            InlineKeyboardButton(text="🎁 Kunlik sovg'a", callback_data="daily"),
-            InlineKeyboardButton(text="👥 Do'stlarni taklif", callback_data="invite"),
-        ],
-        [
-            InlineKeyboardButton(text="🛒 Market", callback_data="market"),
-            InlineKeyboardButton(text="📢 Kanal", url=f"https://t.me/susambilmarket"),
+            InlineKeyboardButton(text="🖼 Rasmlar", callback_data="tab_images"),
+            InlineKeyboardButton(text="📁 Fayllar", callback_data="tab_files"),
         ],
     ])
 
-# ═══════════════════════════════════════════════════════
-#  HANDLERLAR
-# ═══════════════════════════════════════════════════════
+def kb_admin_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Yangi qo'shish", callback_data="admin_add")],
+        [InlineKeyboardButton(text="📋 Ro'yxat ko'rish", callback_data="admin_list")],
+        [InlineKeyboardButton(text="📊 Statistika", callback_data="admin_stats")],
+        [InlineKeyboardButton(text="🌐 Ilovani ochish", web_app=WebAppInfo(url=WEBAPP_URL))],
+    ])
+
+def kb_categories():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🎮 O'yin", callback_data="cat_games"),
+            InlineKeyboardButton(text="📱 Ilova", callback_data="cat_apps"),
+        ],
+        [
+            InlineKeyboardButton(text="🖼 Rasm", callback_data="cat_images"),
+            InlineKeyboardButton(text="📁 Fayl", callback_data="cat_files"),
+        ],
+        [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="admin_cancel")],
+    ])
+
+def kb_skip_back():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="⏭ O'tkazib yuborish", callback_data="skip"),
+            InlineKeyboardButton(text="❌ Bekor", callback_data="admin_cancel"),
+        ]
+    ])
+
+def kb_badge():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🔥 HOT",    callback_data="badge_hot"),
+            InlineKeyboardButton(text="🆕 NEW",    callback_data="badge_new"),
+        ],
+        [
+            InlineKeyboardButton(text="🆓 BEPUL",  callback_data="badge_free"),
+            InlineKeyboardButton(text="➖ Yo'q",   callback_data="badge_none"),
+        ],
+    ])
+
+def kb_colors():
+    colors = [
+        ("🟣 Binafsha", "#6d28d9,#7c3aed"),
+        ("🔴 Qizil",    "#be185d,#db2777"),
+        ("🔵 Ko'k",     "#0369a1,#0284c7"),
+        ("🟢 Yashil",   "#059669,#10b981"),
+        ("🟠 To'q sariq","#d97706,#f59e0b"),
+        ("⚫ To'q",     "#1e1b4b,#312e81"),
+    ]
+    rows = []
+    for i in range(0, len(colors), 2):
+        row = []
+        for name, val in colors[i:i+2]:
+            row.append(InlineKeyboardButton(text=name, callback_data="color_"+val))
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="⏭ O'tkazib yuborish", callback_data="skip")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+def kb_confirm(item_id: str):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Saqlash",      callback_data=f"save_{item_id}")],
+        [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="admin_cancel")],
+    ])
+
+def kb_file_types():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📄 PDF",  callback_data="ftype_PDF"),
+            InlineKeyboardButton(text="📊 XLSX", callback_data="ftype_XLSX"),
+        ],
+        [
+            InlineKeyboardButton(text="📝 DOCX", callback_data="ftype_DOCX"),
+            InlineKeyboardButton(text="📊 PPTX", callback_data="ftype_PPTX"),
+        ],
+        [
+            InlineKeyboardButton(text="🗜 ZIP",  callback_data="ftype_ZIP"),
+            InlineKeyboardButton(text="📦 Boshqa", callback_data="ftype_OTHER"),
+        ],
+    ])
+
+def kb_list_items(items: list):
+    rows = []
+    for item in items[:20]:
+        name = item.get('name_uz', item['id'])[:30]
+        rows.append([InlineKeyboardButton(
+            text=f"🗑 {name}",
+            callback_data=f"del_{item['id']}"
+        )])
+    rows.append([InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin_back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+# ═══════════════════════════════════════════
+# /START
+# ═══════════════════════════════════════════
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     user = message.from_user
-    args = message.text.split()
-    invited_by = int(args[1].replace("ref_","")) if len(args)>1 and args[1].startswith("ref_") else 0
-
-    await create_user(user.id, user.username or "", user.full_name, invited_by)
-
-    if invited_by and invited_by != user.id:
-        await add_coins(invited_by, 100)
-        try:
-            await bot.send_message(invited_by,
-                f"🎉 Do'stingiz <b>{user.full_name}</b> qo'shildi!\n+100 🪙 coin oldiniz!")
-        except: pass
-
-    db_user = await get_user(user.id)
-    coins = db_user['coins'] if db_user else 0
-
-    text = f"""
-🌟 <b>SUSAMBIL MARKET</b> ga xush kelibsiz!
-
-Salom, <b>{user.first_name}</b>! 👋
-💰 Balansingiz: <b>{coins} 🪙</b>
-
-🎮 O'yin o'ynang → coin yig'ing
-🏆 Reytingda yuqoriga chiqing
-🎁 Har kuni sovg'a oling
-👥 Do'stlarni taklif qiling → bonus oling
-
-<i>O'zbekistonning №1 o'yin platformasi!</i>
-"""
-    await message.answer(text, reply_markup=main_menu())
-
-# ── O'YINLAR BOSH SAHIFASI ───────────────────────────────────
-@dp.callback_query(F.data == "games_home")
-async def games_home(callback: types.CallbackQuery):
-    builder = InlineKeyboardBuilder()
-    for gid, g in GAMES.items():
-        coin_text = f" • +{g['coins']}🪙" if g['coins'] > 0 else ""
-        builder.row(InlineKeyboardButton(
-            text=f"{g['emoji']} {g['name']} ⭐{g['rating']}{coin_text}",
-            callback_data=f"game_{gid}"
-        ))
-    builder.row(
-        InlineKeyboardButton(text="🏆 Top o'yinchilar", callback_data="leaderboard"),
-        InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_main"),
-    )
-
-    text = "🎮 <b>O'YINLAR KATALOGI</b>\n\nO'yin tanlang va coin yig'ing! 🪙"
-    await callback.message.edit_text(text, reply_markup=builder.as_markup())
-
-# ── O'YIN TAFSILOTI ──────────────────────────────────────────
-@dp.callback_query(F.data.startswith("game_"))
-async def game_detail(callback: types.CallbackQuery):
-    gid = callback.data.replace("game_", "")
-    g = GAMES.get(gid)
-    if not g:
-        await callback.answer("O'yin topilmadi!")
-        return
-
-    # Leaderboard top 3
-    top = await get_leaderboard(gid, 3)
-    medals = ["🥇","🥈","🥉"]
-    lb_text = ""
-    if top:
-        lb_text = "\n\n🏆 <b>Top o'yinchilar:</b>\n"
-        for i, row in enumerate(top):
-            name = row['full_name'] or row['username'] or "Noma'lum"
-            lb_text += f"{medals[i]} {name} — {row['best']} ball\n"
-
-    text = f"""
-{g['emoji']} <b>{g['name']}</b>
-
-📝 {g['desc']}
-🎯 Janr: {g['genre']}
-👥 O'ynaganlar: {g['players']}
-⭐ Reyting: {g['rating']}/5.0
-💰 Mukofot: +{g['coins']} 🪙 har o'yinda
-{lb_text}"""
-
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(
-        text=f"🚀 O'ynash",
-        web_app=WebAppInfo(url=f"{WEBAPP_URL}/games/{gid}")
-    ))
-    builder.row(
-        InlineKeyboardButton(text="🏆 Reyting", callback_data=f"lb_{gid}"),
-        InlineKeyboardButton(text="⬅️ Orqaga", callback_data="games_home"),
-    )
-    await callback.message.edit_text(text, reply_markup=builder.as_markup())
-
-# ── MINI APP'LAR ─────────────────────────────────────────────
-@dp.callback_query(F.data == "miniapps")
-async def miniapps(callback: types.CallbackQuery):
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(
-        text="🧮 Biznes Kalkulator",
-        web_app=WebAppInfo(url=f"{WEBAPP_URL}/apps/calculator")
-    ))
-    builder.row(InlineKeyboardButton(
-        text="💱 Valyuta Konvertor",
-        web_app=WebAppInfo(url=f"{WEBAPP_URL}/apps/currency")
-    ))
-    builder.row(InlineKeyboardButton(
-        text="📊 CV Yaratuvchi",
-        web_app=WebAppInfo(url=f"{WEBAPP_URL}/apps/cv")
-    ))
-    builder.row(InlineKeyboardButton(
-        text="📅 Jadval Tuzuvchi",
-        web_app=WebAppInfo(url=f"{WEBAPP_URL}/apps/schedule")
-    ))
-    builder.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_main"))
-
-    await callback.message.edit_text(
-        "🛠 <b>MINI APP'LAR</b>\n\nQulay asboblar — to'g'ridan Telegramda!",
-        reply_markup=builder.as_markup()
-    )
-
-# ── PROFIL ───────────────────────────────────────────────────
-@dp.callback_query(F.data == "profile")
-async def profile(callback: types.CallbackQuery):
-    user = await get_user(callback.from_user.id)
-    if not user:
-        await callback.answer("Profil topilmadi!")
-        return
-
-    lvl = user['level']
-    text = f"""
-👤 <b>PROFIL</b>
-
-🏷 Ism: <b>{user['full_name']}</b>
-🎖 Daraja: <b>{level_name(lvl)} (Level {lvl})</b>
-📊 Tajriba: {xp_bar(user['xp'])}
-
-💰 Coinlar: <b>{user['coins']} 🪙</b>
-🎮 O'yinlar: <b>{user['games_played']}</b>
-🏆 G'alabalar: <b>{user['wins']}</b>
-🔥 Seriya: <b>{user['streak']} kun</b>
-
-🔗 Referal: <code>https://t.me/susambilmarketbot?start=ref_{user['tg_id']}</code>
-"""
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="🏅 Yutuqlarim", callback_data="achievements"),
-        InlineKeyboardButton(text="📊 Statistika", callback_data="stats"),
-    )
-    builder.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_main"))
-    await callback.message.edit_text(text, reply_markup=builder.as_markup())
-
-# ── LEADERBOARD ──────────────────────────────────────────────
-@dp.callback_query(F.data == "leaderboard")
-async def leaderboard(callback: types.CallbackQuery):
-    top = await get_leaderboard(limit=10)
-    medals = ["🥇","🥈","🥉"] + ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
-    text = "🏆 <b>GLOBAL REYTING</b>\n\n"
-
-    if top:
-        for i, row in enumerate(top):
-            name = row['full_name'] or row['username'] or "Noma'lum"
-            text += f"{medals[i]} <b>{name}</b> — {row['coins']}🪙 · Lv.{row['level']}\n"
-    else:
-        text += "Hali o'yinchilar yo'q. Birinchi bo'ling! 🚀"
-
-    builder = InlineKeyboardBuilder()
-    for gid, g in list(GAMES.items())[:4]:
-        builder.row(InlineKeyboardButton(
-            text=f"{g['emoji']} {g['name']} reytingi",
-            callback_data=f"lb_{gid}"
-        ))
-    builder.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_main"))
-    await callback.message.edit_text(text, reply_markup=builder.as_markup())
-
-@dp.callback_query(F.data.startswith("lb_"))
-async def game_leaderboard(callback: types.CallbackQuery):
-    gid = callback.data.replace("lb_", "")
-    g = GAMES.get(gid, {})
-    top = await get_leaderboard(gid, 10)
-    medals = ["🥇","🥈","🥉"] + ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
-
-    game_name = g.get('name', 'O\'yin')
-    text = f"🏆 <b>{game_name} — TOP 10</b>\n\n"
-    if top:
-        for i, row in enumerate(top):
-            name = row['full_name'] or row['username'] or "Noma'lum"
-            text += f"{medals[i]} <b>{name}</b> — {row['best']} ball\n"
-    else:
-        text += "Hali hech kim o'ynamagan. Birinchi bo'ling! 🚀"
-
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text=f"🚀 O'ynash", callback_data=f"game_{gid}"),
-        InlineKeyboardButton(text="⬅️ Orqaga", callback_data="leaderboard"),
-    )
-    await callback.message.edit_text(text, reply_markup=builder.as_markup())
-
-# ── KUNLIK SOVG'A ────────────────────────────────────────────
-@dp.callback_query(F.data == "daily")
-async def daily_reward(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    claimed, coins = await claim_daily(user_id)
-
-    if claimed:
-        user = await get_user(user_id)
-        await add_xp(user_id, 50)
-        text = f"""
-🎁 <b>KUNLIK SOVG'A!</b>
-
-✅ Bugungi sovg'angiz olindi!
-
-💰 +{coins} 🪙 coin
-⭐ +50 XP
-🔥 Seriya: {user['streak'] if user else 1} kun
-
-<i>Ertaga yana keling — yangi sovg'a kutmoqda!</i>
-"""
-    else:
-        text = "⏰ <b>Bugungi sovg'ani allaqachon oldingiz!</b>\n\nErtaga yana keling! 🎁"
-
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="🎮 O'ynash", callback_data="games_home"),
-        InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_main"),
-    )
-    await callback.message.edit_text(text, reply_markup=builder.as_markup())
-
-# ── DO'STLARNI TAKLIF ────────────────────────────────────────
-@dp.callback_query(F.data == "invite")
-async def invite(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    link = f"https://t.me/susambilmarketbot?start=ref_{user_id}"
-    text = f"""
-👥 <b>DO'STLARNI TAKLIF QIL</b>
-
-Har bir taklif qilgan do'stingiz uchun:
-🪙 +100 coin olasiz
-🌟 Do'stingiz ham +50 coin oladi
-
-📎 Sizning havola:
-<code>{link}</code>
-
-Ulashing va birga o'ynang! 🎮
-"""
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(
-        text="📤 Ulashish",
-        url=f"https://t.me/share/url?url={link}&text=Susambil%20Market'da%20birga%20o'ynaylik!"
-    ))
-    builder.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_main"))
-    await callback.message.edit_text(text, reply_markup=builder.as_markup())
-
-# ── MARKET ───────────────────────────────────────────────────
-@dp.callback_query(F.data == "market")
-async def market(callback: types.CallbackQuery):
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="🤖 Bot Bozor", callback_data="cat_bots"))
-    builder.row(InlineKeyboardButton(text="📦 Shablonlar", callback_data="cat_templates"))
-    builder.row(InlineKeyboardButton(text="📚 Bilim Bozori", callback_data="cat_courses"))
-    builder.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_main"))
-    await callback.message.edit_text(
-        "🛒 <b>SUSAMBIL MARKET</b>\n\nRaqamli mahsulotlar do'koni!",
-        reply_markup=builder.as_markup()
-    )
-
-# ── SCORE QABUL QILISH (WebApp'dan) ─────────────────────────
-@dp.message(F.web_app_data)
-async def web_app_data(message: types.Message):
-    try:
-        data = json.loads(message.web_app_data.data)
-        game_id = data.get("game_id")
-        score   = int(data.get("score", 0))
-        user_id = message.from_user.id
-
-        g = GAMES.get(game_id, {})
-        coins_earned = g.get("coins", 10)
-
-        await save_score(user_id, game_id, score)
-        await add_coins(user_id, coins_earned)
-        leveled = await add_xp(user_id, score // 10 + 20)
-
-        user = await get_user(user_id)
-        level_up_text = f"\n\n🎊 <b>LEVEL UP!</b> Siz {level_name(user['level'])} bo'ldingiz!" if leveled else ""
-
-        text = f"""
-🎮 <b>O'YIN YAKUNLANDI!</b>
-
-🎯 O'yin: {g.get('name', game_id)}
-📊 Natija: <b>{score} ball</b>
-💰 Mukofot: +{coins_earned} 🪙
-💼 Jami coin: {user['coins'] if user else '?'} 🪙
-{level_up_text}
-"""
-        builder = InlineKeyboardBuilder()
-        builder.row(
-            InlineKeyboardButton(text="🔄 Qayta", callback_data=f"game_{game_id}"),
-            InlineKeyboardButton(text="🏆 Reyting", callback_data=f"lb_{game_id}"),
-        )
-        builder.row(InlineKeyboardButton(text="🏠 Bosh menu", callback_data="back_main"))
-        await message.answer(text, reply_markup=builder.as_markup())
-    except Exception as e:
-        await message.answer(f"Xatolik: {e}")
-
-# ── YUTUQLAR ─────────────────────────────────────────────────
-@dp.callback_query(F.data == "achievements")
-async def achievements(callback: types.CallbackQuery):
-    user = await get_user(callback.from_user.id)
-    if not user:
-        await callback.answer("Profil topilmadi!")
-        return
-
-    badges = []
-    if user['games_played'] >= 1:   badges.append("🎮 Birinchi o'yin")
-    if user['games_played'] >= 10:  badges.append("🔟 10 ta o'yin")
-    if user['games_played'] >= 50:  badges.append("🏅 50 ta o'yin")
-    if user['coins'] >= 100:        badges.append("💰 100 coin")
-    if user['coins'] >= 1000:       badges.append("💎 1000 coin")
-    if user['streak'] >= 3:         badges.append("🔥 3 kunlik seriya")
-    if user['streak'] >= 7:         badges.append("⚡ Haftalik seriya")
-    if user['level'] >= 3:          badges.append("⭐ 3-daraja")
-    if user['level'] >= 5:          badges.append("🌟 5-daraja")
-
-    text = "🏅 <b>YUTUQLARIM</b>\n\n"
-    text += "\n".join([f"✅ {b}" for b in badges]) if badges else "Hali yutuq yo'q. O'ynang va yig'ing! 🎮"
-    text += f"\n\n<i>Jami: {len(badges)} ta yutuq</i>"
-
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="⬅️ Profil", callback_data="profile"))
-    await callback.message.edit_text(text, reply_markup=builder.as_markup())
-
-# ── ORQAGA ────────────────────────────────────────────────────
-@dp.callback_query(F.data == "back_main")
-async def back_main(callback: types.CallbackQuery):
-    user = await get_user(callback.from_user.id)
-    coins = user['coins'] if user else 0
-    name  = callback.from_user.first_name
-    text = f"""
-🌟 <b>SUSAMBIL MARKET</b>
-
-👋 {name} | 💰 {coins} 🪙
-
-🎮 O'ynang, yig'ing, yuting!
-"""
-    await callback.message.edit_text(text, reply_markup=main_menu())
-
-# ── ADMIN ─────────────────────────────────────────────────────
-@dp.message(Command("admin"))
-async def admin(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
     async with aiosqlite.connect(DB_PATH) as db:
-        users  = await (await db.execute("SELECT COUNT(*) FROM users")).fetchone()
-        scores = await (await db.execute("SELECT COUNT(*) FROM scores")).fetchone()
-        coins  = await (await db.execute("SELECT SUM(coins) FROM users")).fetchone()
+        await db.execute(
+            "INSERT OR IGNORE INTO users (tg_id, username, full_name) VALUES (?,?,?)",
+            (user.id, user.username or "", user.full_name)
+        )
+        await db.commit()
 
-    text = f"""
-👨‍💼 <b>ADMIN PANEL</b>
+    text = (
+        f"👋 Salom, <b>{user.first_name}</b>!\n\n"
+        f"🌟 <b>Susambil Market</b> ga xush kelibsiz!\n\n"
+        f"Quyidagi tugmani bosib ilovani oching:"
+    )
+    await message.answer(text, reply_markup=kb_main_menu())
 
-👥 Foydalanuvchilar: {users[0]}
-🎮 O'yinlar o'ynalgan: {scores[0]}
-💰 Jami coinlar: {coins[0] or 0}
-"""
-    await message.answer(text)
+# Tab buttons
+@dp.callback_query(F.data.startswith("tab_"))
+async def tab_handler(callback: types.CallbackQuery):
+    tab = callback.data.replace("tab_", "")
+    tab_names = {
+        'games':  "🎮 O'yinlar",
+        'apps':   "📱 Ilovalar",
+        'images': "🖼 Rasmlar",
+        'files':  "📁 Fayllar",
+    }
+    items = await get_items(tab)
+    if not items:
+        await callback.answer(f"{tab_names.get(tab,'')} bo'limi hozircha bo'sh", show_alert=True)
+        return
+    text = f"<b>{tab_names.get(tab, tab)}</b> — {len(items)} ta element\n\n"
+    for item in items[:10]:
+        price = "Bepul" if not item['price'] else f"{item['price']} coin"
+        text += f"• <b>{item['name_uz']}</b> — {price}\n"
+    await callback.message.edit_text(text, reply_markup=kb_main_menu())
 
-# ═══════════════════════════════════════════════════════
-#  HEALTH CHECK + ISHGA TUSHIRISH
-# ═══════════════════════════════════════════════════════
+# ═══════════════════════════════════════════
+# /ADMIN
+# ═══════════════════════════════════════════
 
-async def health_check(request):
-    return web.Response(text="✅ Susambil Market ishlayapti!", status=200)
+@dp.message(Command("admin"))
+async def cmd_admin(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("⛔️ Ruxsat yo'q!")
+        return
+    stats = await get_stats()
+    text = (
+        f"👨‍💼 <b>ADMIN PANEL</b>\n\n"
+        f"📊 Statistika:\n"
+        f"• 🎮 O'yinlar: <b>{stats['games']}</b>\n"
+        f"• 📱 Ilovalar: <b>{stats['apps']}</b>\n"
+        f"• 🖼 Rasmlar: <b>{stats['images']}</b>\n"
+        f"• 📁 Fayllar: <b>{stats['files']}</b>\n"
+        f"• 👥 Foydalanuvchilar: <b>{stats['users']}</b>\n\n"
+        f"Nima qilmoqchisiz?"
+    )
+    await message.answer(text, reply_markup=kb_admin_menu())
+
+@dp.callback_query(F.data == "admin_back")
+async def admin_back(callback: types.CallbackQuery):
+    stats = await get_stats()
+    text = (
+        f"👨‍💼 <b>ADMIN PANEL</b>\n\n"
+        f"🎮 {stats['games']} | 📱 {stats['apps']} | 🖼 {stats['images']} | 📁 {stats['files']}\n\n"
+        f"Nima qilmoqchisiz?"
+    )
+    await callback.message.edit_text(text, reply_markup=kb_admin_menu())
+
+@dp.callback_query(F.data == "admin_stats")
+async def admin_stats(callback: types.CallbackQuery):
+    stats = await get_stats()
+    text = (
+        f"📊 <b>Statistika</b>\n\n"
+        f"🎮 O'yinlar: <b>{stats['games']}</b>\n"
+        f"📱 Ilovalar: <b>{stats['apps']}</b>\n"
+        f"🖼 Rasmlar: <b>{stats['images']}</b>\n"
+        f"📁 Fayllar: <b>{stats['files']}</b>\n"
+        f"👥 Foydalanuvchilar: <b>{stats['users']}</b>"
+    )
+    await callback.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin_back")]
+        ])
+    )
+
+# ═══════════════════════════════════════════
+# ADD FLOW
+# ═══════════════════════════════════════════
+
+@dp.callback_query(F.data == "admin_add")
+async def admin_add_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        return
+    await state.clear()
+    await state.set_state(AddItem.category)
+    await callback.message.edit_text(
+        "➕ <b>Yangi element qo'shish</b>\n\nQaysi bo'limga qo'shmoqchisiz?",
+        reply_markup=kb_categories()
+    )
+
+@dp.callback_query(F.data.startswith("cat_"), StateFilter(AddItem.category))
+async def add_category(callback: types.CallbackQuery, state: FSMContext):
+    cat = callback.data.replace("cat_", "")
+    cat_names = {'games': "O'yin", 'apps': "Ilova", 'images': "Rasm", 'files': "Fayl"}
+    await state.update_data(
+        category=cat,
+        cat_name=cat_names.get(cat, cat),
+        item_id=f"{cat}_{int(datetime.now().timestamp())}"
+    )
+    await state.set_state(AddItem.name_uz)
+    await callback.message.edit_text(
+        f"🇺🇿 <b>O'zbek tilida nomi</b>\n\n"
+        f"Kategoriya: <b>{cat_names.get(cat,'')}</b>\n\n"
+        f"Nomini yozing:"
+    )
+
+@dp.message(StateFilter(AddItem.name_uz))
+async def add_name_uz(message: types.Message, state: FSMContext):
+    await state.update_data(name_uz=message.text.strip())
+    await state.set_state(AddItem.name_en)
+    await message.answer(
+        "🇬🇧 <b>Ingliz tilida nomi</b>\n\n"
+        "Nomini yozing yoki o'tkazib yuboring:",
+        reply_markup=kb_skip_back()
+    )
+
+@dp.callback_query(F.data == "skip", StateFilter(AddItem.name_en))
+async def skip_name_en(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    await state.update_data(name_en=data.get('name_uz',''))
+    await state.set_state(AddItem.name_ru)
+    await callback.message.edit_text(
+        "🇷🇺 <b>Rus tilida nomi</b>\n\nNomini yozing yoki o'tkazib yuboring:",
+        reply_markup=kb_skip_back()
+    )
+
+@dp.message(StateFilter(AddItem.name_en))
+async def add_name_en(message: types.Message, state: FSMContext):
+    await state.update_data(name_en=message.text.strip())
+    await state.set_state(AddItem.name_ru)
+    await message.answer(
+        "🇷🇺 <b>Rus tilida nomi</b>\n\nNomini yozing yoki o'tkazib yuboring:",
+        reply_markup=kb_skip_back()
+    )
+
+@dp.callback_query(F.data == "skip", StateFilter(AddItem.name_ru))
+async def skip_name_ru(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    await state.update_data(name_ru=data.get('name_uz',''))
+    await state.set_state(AddItem.desc_uz)
+    await callback.message.edit_text(
+        "📝 <b>Tavsifi</b> (ixtiyoriy)\n\nQisqacha tavsif yozing yoki o'tkazib yuboring:",
+        reply_markup=kb_skip_back()
+    )
+
+@dp.message(StateFilter(AddItem.name_ru))
+async def add_name_ru(message: types.Message, state: FSMContext):
+    await state.update_data(name_ru=message.text.strip())
+    await state.set_state(AddItem.desc_uz)
+    await message.answer(
+        "📝 <b>Tavsifi</b> (ixtiyoriy)\n\nQisqacha tavsif yozing yoki o'tkazib yuboring:",
+        reply_markup=kb_skip_back()
+    )
+
+@dp.callback_query(F.data == "skip", StateFilter(AddItem.desc_uz))
+async def skip_desc(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(desc_uz='', desc_en='', desc_ru='')
+    await go_to_url(callback.message, state)
+
+@dp.message(StateFilter(AddItem.desc_uz))
+async def add_desc_uz(message: types.Message, state: FSMContext):
+    await state.update_data(desc_uz=message.text.strip(), desc_en=message.text.strip(), desc_ru=message.text.strip())
+    await go_to_url(message, state)
+
+async def go_to_url(msg, state: FSMContext):
+    data = await state.get_data()
+    cat = data.get('category','')
+    await state.set_state(AddItem.url)
+    if cat == 'images':
+        prompt = "🔗 <b>Rasm URL</b>\n\nRasmning to'g'ridan URL manzilini yuboring:"
+    elif cat == 'files':
+        prompt = "🔗 <b>Fayl URL</b>\n\nYuklab olish havolasini yuboring\n(Google Drive, Dropbox, Telegram va h.k.):"
+    else:
+        prompt = "🔗 <b>URL manzil</b>\n\nIlova yoki o'yin URL sini yuboring:"
+    if hasattr(msg, 'edit_text'):
+        await msg.edit_text(prompt, reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Bekor", callback_data="admin_cancel")]
+        ]))
+    else:
+        await msg.answer(prompt, reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Bekor", callback_data="admin_cancel")]
+        ]))
+
+@dp.message(StateFilter(AddItem.url))
+async def add_url(message: types.Message, state: FSMContext):
+    url = message.text.strip()
+    await state.update_data(url=url)
+    data = await state.get_data()
+    cat = data.get('category','')
+
+    if cat == 'files':
+        await state.set_state(AddItem.file_type)
+        await message.answer(
+            "📂 <b>Fayl turi</b>\n\nQaysi turdagi fayl?",
+            reply_markup=kb_file_types()
+        )
+    elif cat == 'images':
+        await state.update_data(img_url=url)
+        await state.set_state(AddItem.price)
+        await message.answer(
+            "💰 <b>Narxi</b>\n\n0 = Bepul\nNarxni yozing (coin):",
+            reply_markup=kb_skip_back()
+        )
+    else:
+        await state.set_state(AddItem.img_url)
+        await message.answer(
+            "🖼 <b>Rasm URL</b> (ixtiyoriy)\n\n"
+            "Thumbnail uchun rasm URL sini yuboring\n"
+            "yoki o'tkazib yuboring:",
+            reply_markup=kb_skip_back()
+        )
+
+@dp.callback_query(F.data.startswith("ftype_"), StateFilter(AddItem.file_type))
+async def add_file_type(callback: types.CallbackQuery, state: FSMContext):
+    ftype = callback.data.replace("ftype_", "")
+    await state.update_data(file_type=ftype)
+    await state.set_state(AddItem.file_size)
+    await callback.message.edit_text(
+        "📦 <b>Fayl hajmi</b>\n\nMasalan: 2.4 MB, 15 KB\nYoki o'tkazib yuboring:",
+        reply_markup=kb_skip_back()
+    )
+
+@dp.callback_query(F.data == "skip", StateFilter(AddItem.file_type))
+async def skip_file_type(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(file_type='OTHER')
+    await state.set_state(AddItem.file_size)
+    await callback.message.edit_text(
+        "📦 <b>Fayl hajmi</b>\n\nMasalan: 2.4 MB\nYoki o'tkazib yuboring:",
+        reply_markup=kb_skip_back()
+    )
+
+@dp.message(StateFilter(AddItem.file_size))
+async def add_file_size(message: types.Message, state: FSMContext):
+    await state.update_data(file_size=message.text.strip())
+    await state.set_state(AddItem.price)
+    await message.answer("💰 <b>Narxi</b>\n\n0 = Bepul\nNarxni yozing:", reply_markup=kb_skip_back())
+
+@dp.callback_query(F.data == "skip", StateFilter(AddItem.file_size))
+async def skip_file_size(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(file_size='')
+    await state.set_state(AddItem.price)
+    await callback.message.edit_text("💰 <b>Narxi</b>\n\n0 = Bepul\nNarxni yozing:", reply_markup=kb_skip_back())
+
+@dp.callback_query(F.data == "skip", StateFilter(AddItem.img_url))
+async def skip_img(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(img_url='')
+    await state.set_state(AddItem.color)
+    await callback.message.edit_text(
+        "🎨 <b>Thumbnail rangi</b>\n\nTugmachani tanlang:",
+        reply_markup=kb_colors()
+    )
+
+@dp.message(StateFilter(AddItem.img_url))
+async def add_img(message: types.Message, state: FSMContext):
+    # Accept URL or photo
+    if message.photo:
+        photo = message.photo[-1]
+        await state.update_data(img_url=f"tg://file/{photo.file_id}")
+    else:
+        await state.update_data(img_url=message.text.strip() if message.text else '')
+    await state.set_state(AddItem.color)
+    await message.answer(
+        "🎨 <b>Thumbnail rangi</b>\n\nTugmachani tanlang:",
+        reply_markup=kb_colors()
+    )
+
+@dp.callback_query(F.data.startswith("color_"), StateFilter(AddItem.color))
+async def add_color(callback: types.CallbackQuery, state: FSMContext):
+    color = callback.data.replace("color_", "")
+    await state.update_data(color=color)
+    await state.set_state(AddItem.price)
+    await callback.message.edit_text(
+        "💰 <b>Narxi</b>\n\n0 yuboring = Bepul\nNarxni yozing (coin):",
+        reply_markup=kb_skip_back()
+    )
+
+@dp.callback_query(F.data == "skip", StateFilter(AddItem.color))
+async def skip_color(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(color='#6d28d9,#7c3aed')
+    await state.set_state(AddItem.price)
+    await callback.message.edit_text(
+        "💰 <b>Narxi</b>\n\n0 yuboring = Bepul\nNarxni yozing:",
+        reply_markup=kb_skip_back()
+    )
+
+@dp.callback_query(F.data == "skip", StateFilter(AddItem.price))
+async def skip_price(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(price=0)
+    await state.set_state(AddItem.badge)
+    await callback.message.edit_text(
+        "🏷 <b>Badge (belgi)</b>\n\nQaysi belgini qo'shasiz?",
+        reply_markup=kb_badge()
+    )
+
+@dp.message(StateFilter(AddItem.price))
+async def add_price(message: types.Message, state: FSMContext):
+    try:
+        price = int(message.text.strip())
+    except:
+        price = 0
+    await state.update_data(price=price)
+    await state.set_state(AddItem.badge)
+    await message.answer(
+        "🏷 <b>Badge (belgi)</b>\n\nQaysi belgini qo'shasiz?",
+        reply_markup=kb_badge()
+    )
+
+@dp.callback_query(F.data.startswith("badge_"), StateFilter(AddItem.badge))
+async def add_badge(callback: types.CallbackQuery, state: FSMContext):
+    badge = callback.data.replace("badge_", "")
+    if badge == "none":
+        badge = ""
+    await state.update_data(badge=badge)
+    await show_confirm(callback.message, state)
+
+async def show_confirm(msg, state: FSMContext):
+    data = await state.get_data()
+    await state.set_state(AddItem.confirm)
+
+    cat_icons = {'games':'🎮','apps':'📱','images':'🖼','files':'📁'}
+    cat_names = {'games':"O'yin",'apps':"Ilova",'images':"Rasm",'files':"Fayl"}
+    badge_labels = {'hot':'🔥 HOT','new':'🆕 NEW','free':'🆓 BEPUL','':'—'}
+
+    text = (
+        f"✅ <b>Tekshirib ko'ring</b>\n\n"
+        f"{cat_icons.get(data.get('category',''),'📦')} Kategoriya: <b>{cat_names.get(data.get('category',''),'')}</b>\n\n"
+        f"🇺🇿 Nomi: <b>{data.get('name_uz','')}</b>\n"
+        f"🇬🇧 Nomi: <b>{data.get('name_en','')}</b>\n"
+        f"🇷🇺 Nomi: <b>{data.get('name_ru','')}</b>\n\n"
+        f"📝 Tavsif: {data.get('desc_uz','—')}\n"
+        f"🔗 URL: <code>{data.get('url','—')}</code>\n"
+        f"🖼 Rasm: {'✅' if data.get('img_url') else '—'}\n"
+        f"💰 Narxi: <b>{'Bepul' if not data.get('price') else str(data.get('price'))+' coin'}</b>\n"
+        f"🏷 Badge: <b>{badge_labels.get(data.get('badge',''),'—')}</b>\n"
+    )
+    if data.get('file_type'):
+        text += f"📂 Fayl turi: <b>{data.get('file_type')}</b>\n"
+    if data.get('file_size'):
+        text += f"📦 Hajm: <b>{data.get('file_size')}</b>\n"
+
+    await msg.edit_text(text, reply_markup=kb_confirm(data.get('item_id','')))
+
+@dp.callback_query(F.data.startswith("save_"))
+async def save_confirmed(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    cat = data.get('category','games')
+    action_map = {'games':'play','apps':'open','images':'download','files':'download'}
+
+    item = {
+        'id':        data.get('item_id'),
+        'category':  cat,
+        'name_uz':   data.get('name_uz',''),
+        'name_en':   data.get('name_en',''),
+        'name_ru':   data.get('name_ru',''),
+        'desc_uz':   data.get('desc_uz',''),
+        'desc_en':   data.get('desc_en',''),
+        'desc_ru':   data.get('desc_ru',''),
+        'url':       data.get('url',''),
+        'img_url':   data.get('img_url',''),
+        'file_type': data.get('file_type',''),
+        'file_size': data.get('file_size',''),
+        'color':     data.get('color','#6d28d9,#7c3aed'),
+        'price':     data.get('price',0),
+        'badge':     data.get('badge',''),
+        'rating':    0.0,
+        'users':     '0',
+        'action':    action_map.get(cat,'open'),
+    }
+
+    await save_item(item)
+    await state.clear()
+
+    await callback.message.edit_text(
+        f"✅ <b>Muvaffaqiyatli saqlandi!</b>\n\n"
+        f"<b>{item['name_uz']}</b> qo'shildi.\n"
+        f"Ilova yangilanadi.\n\n"
+        f"Yana qo'shmoqchimisiz?",
+        reply_markup=kb_admin_menu()
+    )
+
+@dp.callback_query(F.data == "admin_cancel")
+async def admin_cancel(callback: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text(
+        "❌ Bekor qilindi.",
+        reply_markup=kb_admin_menu()
+    )
+
+# ═══════════════════════════════════════════
+# LIST & DELETE
+# ═══════════════════════════════════════════
+
+@dp.callback_query(F.data == "admin_list")
+async def admin_list(callback: types.CallbackQuery):
+    items = await get_items()
+    if not items:
+        await callback.answer("Hali hech narsa qo'shilmagan", show_alert=True)
+        return
+    await callback.message.edit_text(
+        f"📋 <b>Barcha elementlar</b> ({len(items)} ta)\n\n"
+        f"O'chirish uchun bosing:",
+        reply_markup=kb_list_items(items)
+    )
+
+@dp.callback_query(F.data.startswith("del_"))
+async def delete_item_handler(callback: types.CallbackQuery):
+    item_id = callback.data.replace("del_", "")
+    await delete_item(item_id)
+    items = await get_items()
+    await callback.answer("✅ O'chirildi!")
+    if items:
+        await callback.message.edit_text(
+            f"📋 <b>Elementlar</b> ({len(items)} ta)\n\nO'chirish uchun bosing:",
+            reply_markup=kb_list_items(items)
+        )
+    else:
+        await callback.message.edit_text("📋 Ro'yxat bo'sh", reply_markup=kb_admin_menu())
+
+# ═══════════════════════════════════════════
+# REST API (webapp uchun)
+# ═══════════════════════════════════════════
+
+async def api_items(request):
+    """GET /api/items?category=games"""
+    cat = request.rel_url.query.get('category', None)
+    items = await get_items(cat)
+
+    # Format for webapp
+    def fmt(item):
+        return {
+            'id':       item['id'],
+            'category': item['category'],
+            'name':     {'uz': item['name_uz'], 'en': item['name_en'], 'ru': item['name_ru']},
+            'desc':     {'uz': item['desc_uz'], 'en': item['desc_en'], 'ru': item['desc_ru']},
+            'url':      item['url'],
+            'img':      item['img_url'],
+            'fileType': item['file_type'],
+            'fileSize': item['file_size'],
+            'color':    item['color'],
+            'price':    item['price'],
+            'badge':    item['badge'],
+            'rating':   item['rating'],
+            'users':    item['users'],
+            'action':   item['action'],
+        }
+
+    data = [fmt(i) for i in items]
+    return web.Response(
+        text=json.dumps(data, ensure_ascii=False),
+        content_type='application/json',
+        headers={'Access-Control-Allow-Origin': '*'}
+    )
+
+async def api_health(request):
+    return web.Response(text="OK", status=200)
 
 async def start_web_server():
     app = web.Application()
-    app.router.add_get("/", health_check)
-    app.router.add_get("/health", health_check)
+    app.router.add_get('/health',    api_health)
+    app.router.add_get('/api/items', api_items)
     runner = web.AppRunner(app)
     await runner.setup()
-    port = int(os.getenv("PORT", 8080))
-    site = web.TCPSite(runner, "0.0.0.0", port)
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
-    print(f"🌐 Health check: http://0.0.0.0:{port}")
+    log.info(f"🌐 API server: http://0.0.0.0:{PORT}")
+
+# ═══════════════════════════════════════════
+# MAIN
+# ═══════════════════════════════════════════
 
 async def main():
     await init_db()
     await start_web_server()
-    print("🚀 Susambil Market Gaming Platform ishga tushdi!")
+    log.info("🚀 Susambil Market Bot ishga tushdi!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
